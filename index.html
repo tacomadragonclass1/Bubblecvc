@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Bubble Blending Board</title>
+<style>
+  :root {
+    --ink: #eaf6ff;
+    --panel: rgba(6, 28, 48, 0.93);
+    --line: #2b6186;
+    --consonant: #1f6dd0;
+    --vowel: #d92f3f;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #04253f; color: var(--ink);
+    font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+    touch-action: none; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none;
+  }
+  #stage { display: block; width: 100%; height: 100%; }
+
+  /* ---- chrome -----------------------------------------------------------
+     The home button stays LEGIBLE. The guard against a child leaving mid-word
+     is the double tap, not camouflage - an adult has to be able to find it
+     from across the room, which is the lesson the braille app learned the hard
+     way when a dim button on a dark ground could not be found at all. */
+  #home, #replay {
+    position: absolute; top: max(10px, env(safe-area-inset-top)); z-index: 40;
+    height: 46px; min-width: 52px; padding: 0 14px;
+    border: 2px solid #7fb8dd; border-radius: 12px;
+    background: rgba(8, 36, 60, 0.9); color: #d8ecfb;
+    font: bold 20px/42px "Trebuchet MS", sans-serif;
+    transition: background .12s linear, color .12s linear, transform .12s;
+  }
+  #home { left: max(10px, env(safe-area-inset-left)); }
+  #replay { right: max(10px, env(safe-area-inset-right)); }
+  #home.armed {
+    background: #e8f4ff; color: #0a2b45; border-color: #fff; transform: scale(1.06);
+  }
+  #home[hidden], #replay[hidden] { display: none; }
+
+  /* ---- prescreen -------------------------------------------------------- */
+  .prescreen {
+    position: absolute; inset: 0; z-index: 60; overflow-y: auto;
+    background: linear-gradient(180deg, #05314f 0%, #021a2e 100%);
+    display: grid; place-items: start center; padding: 3vh 2vw 5vh;
+  }
+  .prescreen[hidden] { display: none; }
+  .ps-inner { width: min(1500px, 96vw); text-align: center; }
+  .prescreen h1 { margin: 0 0 4px; font-size: clamp(26px, 4.2vw, 50px); letter-spacing: .5px; }
+  .ps-sub { margin: 0 0 3vh; opacity: .72; font-size: clamp(14px, 1.6vw, 20px); }
+
+  .ps-cols { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: clamp(10px, 1.6vw, 26px); }
+  @media (max-width: 760px) { .ps-cols { grid-template-columns: 1fr; } }
+
+  .ps-col {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 16px; padding: 14px 12px 18px;
+  }
+  .ps-col h2 { margin: 0 0 10px; font-size: clamp(16px, 1.9vw, 24px); font-weight: 700; }
+
+  .ps-groups { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 12px; }
+  .ps-groups button {
+    padding: 6px 11px; border-radius: 999px; cursor: pointer;
+    border: 1px solid #3d7ba6; background: transparent; color: #bcdcf2;
+    font-size: clamp(11px, 1.15vw, 14px);
+  }
+  .ps-groups button:hover { background: #10405f; }
+
+  .ps-letters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .ps-letter {
+    width: clamp(44px, 4.6vw, 62px); height: clamp(44px, 4.6vw, 62px);
+    border-radius: 12px; cursor: pointer;
+    border: 2px solid #3f7496; background: #0c2d47; color: #9fc4de;
+    font-size: clamp(20px, 2.3vw, 30px); font-weight: 700; line-height: 1;
+    transition: transform .08s, background .12s, color .12s, border-color .12s;
+  }
+  .ps-letter:hover { transform: translateY(-2px); }
+  .ps-letters.consonant .ps-letter.on {
+    background: var(--consonant); border-color: #8ec2ff; color: #fff;
+  }
+  .ps-letters.vowel .ps-letter.on {
+    background: var(--vowel); border-color: #ffb3ba; color: #fff;
+  }
+  /* Rarely ends a word. Dimmed as a nudge, never disabled - UFLI uses
+     pseudowords deliberately, so a teacher must still be able to pick `vog`. */
+  .ps-letter.rare { opacity: .42; }
+  .ps-letter.rare.on { opacity: 1; }
+
+  .ps-presets {
+    display: flex; gap: 8px; align-items: center; justify-content: center;
+    flex-wrap: wrap; margin: 3vh 0 2vh;
+  }
+  .ps-presets label { opacity: .72; font-size: 14px; }
+  .ps-presets select {
+    min-width: 190px; padding: 8px 10px; border-radius: 9px;
+    background: #0c2d47; color: var(--ink); border: 1px solid var(--line);
+  }
+  .ps-presets button {
+    padding: 8px 14px; border-radius: 9px; cursor: pointer;
+    background: #10405f; color: var(--ink); border: 1px solid var(--line);
+  }
+  .ps-presets button:hover { background: #17577f; }
+
+  .ps-start {
+    margin-top: 1vh; padding: 16px 60px; border: 0; border-radius: 999px;
+    background: linear-gradient(180deg, #37c6ff, #0f86cf); color: #022036;
+    font-size: clamp(20px, 2.6vw, 32px); font-weight: 800; cursor: pointer;
+    box-shadow: 0 8px 26px rgba(23, 150, 214, .42);
+  }
+  .ps-start:disabled { filter: grayscale(.8); opacity: .5; cursor: not-allowed; box-shadow: none; }
+  .ps-warn { color: #ffb3ba; margin-top: 10px; font-size: 15px; }
+</style>
+</head>
+<body>
+  <canvas id="stage"></canvas>
+  <button id="home" type="button" hidden aria-label="Back to letter chooser">⌂</button>
+  <button id="replay" type="button" hidden aria-label="Say the sounds again">♪</button>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
