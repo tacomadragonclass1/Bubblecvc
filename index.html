@@ -29,10 +29,13 @@
      way when a dim button on a dark ground could not be found at all. */
   #home, #replay {
     position: absolute; top: max(10px, env(safe-area-inset-top)); z-index: 40;
-    height: 46px; min-width: 52px; padding: 0 14px;
-    border: 2px solid #7fb8dd; border-radius: 12px;
-    background: rgba(8, 36, 60, 0.9); color: #d8ecfb;
-    font: bold 20px/42px "Trebuchet MS", sans-serif;
+    height: 50px; min-width: 56px; padding: 0 15px;
+    border: 1px solid rgba(146, 214, 245, .66); border-radius: 15px;
+    background: linear-gradient(180deg, rgba(16, 64, 96, .88), rgba(6, 32, 54, .92));
+    color: #dff2ff;
+    font: bold 21px/46px "Trebuchet MS", sans-serif;
+    box-shadow: inset 0 1px 0 rgba(200, 242, 255, .28), 0 4px 14px rgba(0, 14, 28, .4);
+    backdrop-filter: blur(4px);
     transition: background .12s linear, color .12s linear, transform .12s;
   }
   #home { left: max(10px, env(safe-area-inset-left)); }
@@ -42,76 +45,144 @@
   }
   #home[hidden], #replay[hidden] { display: none; }
 
-  /* ---- prescreen -------------------------------------------------------- */
+  /* ---- prescreen --------------------------------------------------------
+     The teacher's screen has to belong to the same world as the game, or the
+     app feels like a settings page bolted onto a toy. It gets the same deep
+     sapphire-to-abyss ramp as the water, the same aquamarine light from above,
+     and drifting bubbles - but it stays calm and legible, because an adult is
+     reading it with a class waiting. */
   .prescreen {
     position: absolute; inset: 0; z-index: 60; overflow-y: auto;
-    background: linear-gradient(180deg, #05314f 0%, #021a2e 100%);
+    background:
+      radial-gradient(130% 85% at 50% -12%, rgba(120, 232, 255, .30) 0%, rgba(26, 128, 176, .13) 38%, transparent 68%),
+      linear-gradient(180deg, #0a4a6e 0%, #063552 32%, #03203a 62%, #010f1e 100%);
     display: grid; place-items: start center; padding: 3vh 2vw 5vh;
   }
   .prescreen[hidden] { display: none; }
-  .ps-inner { width: min(1500px, 96vw); text-align: center; }
-  .prescreen h1 { margin: 0 0 4px; font-size: clamp(26px, 4.2vw, 50px); letter-spacing: .5px; }
-  .ps-sub { margin: 0 0 3vh; opacity: .72; font-size: clamp(14px, 1.6vw, 20px); }
+  /* Drifting light, the same god-ray idea as the water shader. */
+  .prescreen::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background:
+      linear-gradient(104deg, transparent 18%, rgba(173, 245, 255, .09) 22%, transparent 27%),
+      linear-gradient(97deg, transparent 52%, rgba(173, 245, 255, .07) 56%, transparent 61%),
+      linear-gradient(110deg, transparent 72%, rgba(173, 245, 255, .05) 76%, transparent 80%);
+    animation: drift 26s ease-in-out infinite alternate;
+  }
+  @keyframes drift { from { transform: translateX(-2.5%); } to { transform: translateX(2.5%); } }
+
+  /* Idle bubbles rising behind the panels. Pure decoration, pointer-events off. */
+  .ps-bubbles { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .ps-bubbles i {
+    position: absolute; bottom: -14vh; border-radius: 50%;
+    background:
+      radial-gradient(circle at 32% 28%, rgba(255,255,255,.85) 0 6%, rgba(255,255,255,.12) 14%, transparent 30%),
+      radial-gradient(circle at 50% 50%, rgba(140, 240, 255, .10) 55%, rgba(190, 160, 255, .22) 78%, rgba(255, 190, 220, .30) 92%, transparent 100%);
+    box-shadow: inset 0 0 18px rgba(255,255,255,.22);
+    animation: rise linear infinite;
+  }
+  @keyframes rise {
+    from { transform: translateY(0) translateX(0); opacity: 0; }
+    12%  { opacity: .85; }
+    88%  { opacity: .7; }
+    to   { transform: translateY(-122vh) translateX(var(--dx, 3vw)); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ps-bubbles i, .prescreen::before { animation: none; }
+  }
+
+  .ps-inner { width: min(1500px, 96vw); text-align: center; position: relative; z-index: 1; }
+  .prescreen h1 {
+    margin: 0 0 4px; font-size: clamp(26px, 4.2vw, 50px); letter-spacing: .5px;
+    color: #eafaff; text-shadow: 0 2px 18px rgba(80, 210, 255, .45);
+  }
+  .ps-sub { margin: 0 0 3vh; opacity: .78; font-size: clamp(14px, 1.6vw, 20px); }
 
   .ps-cols { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: clamp(10px, 1.6vw, 26px); }
   @media (max-width: 760px) { .ps-cols { grid-template-columns: 1fr; } }
 
+  /* Panels read as glass lit from above, not as flat cards. */
   .ps-col {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 16px; padding: 14px 12px 18px;
+    background: linear-gradient(180deg, rgba(14, 62, 92, .78), rgba(5, 32, 52, .86));
+    border: 1px solid rgba(126, 206, 240, .32);
+    border-radius: 20px; padding: 16px 13px 20px;
+    box-shadow: 0 10px 34px rgba(0, 16, 32, .42), inset 0 1px 0 rgba(190, 240, 255, .22);
+    backdrop-filter: blur(3px);
   }
-  .ps-col h2 { margin: 0 0 10px; font-size: clamp(16px, 1.9vw, 24px); font-weight: 700; }
+  .ps-col h2 {
+    margin: 0 0 10px; font-size: clamp(16px, 1.9vw, 24px); font-weight: 700;
+    color: #d6f2ff; letter-spacing: .3px;
+  }
 
   .ps-groups { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 12px; }
   .ps-groups button {
-    padding: 6px 11px; border-radius: 999px; cursor: pointer;
-    border: 1px solid #3d7ba6; background: transparent; color: #bcdcf2;
-    font-size: clamp(11px, 1.15vw, 14px);
+    padding: 6px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid rgba(110, 190, 228, .45); background: rgba(10, 48, 74, .5);
+    color: #bcdcf2; font-size: clamp(11px, 1.15vw, 14px);
+    transition: background .14s, color .14s, border-color .14s;
   }
-  .ps-groups button:hover { background: #10405f; }
+  .ps-groups button:hover { background: rgba(28, 104, 150, .75); color: #fff; }
 
-  .ps-letters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .ps-letters { display: flex; flex-wrap: wrap; gap: 9px; justify-content: center; }
+  /* The letter chips echo the dice: rounded, bevelled, lit from upper-left. */
   .ps-letter {
-    width: clamp(44px, 4.6vw, 62px); height: clamp(44px, 4.6vw, 62px);
-    border-radius: 12px; cursor: pointer;
-    border: 2px solid #3f7496; background: #0c2d47; color: #9fc4de;
-    font-size: clamp(20px, 2.3vw, 30px); font-weight: 700; line-height: 1;
-    transition: transform .08s, background .12s, color .12s, border-color .12s;
+    width: clamp(46px, 4.7vw, 64px); height: clamp(46px, 4.7vw, 64px);
+    border-radius: 15px; cursor: pointer;
+    border: 1px solid rgba(120, 190, 225, .38);
+    background: linear-gradient(165deg, rgba(26, 74, 108, .9), rgba(9, 40, 64, .95));
+    color: #a9cde4;
+    font-size: clamp(21px, 2.4vw, 32px); font-weight: 700; line-height: 1;
+    box-shadow: inset 0 1px 0 rgba(200, 240, 255, .18), 0 3px 8px rgba(0, 14, 28, .35);
+    transition: transform .1s, box-shadow .14s, background .16s, color .16s, border-color .16s;
   }
   .ps-letter:hover { transform: translateY(-2px); }
+  .ps-letter:active { transform: translateY(0) scale(.96); }
   .ps-letters.consonant .ps-letter.on {
-    background: var(--consonant); border-color: #8ec2ff; color: #fff;
+    background: linear-gradient(165deg, #4f93ec, #1d55b4);
+    border-color: #a8d2ff; color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 5px 16px rgba(37, 99, 201, .5);
   }
   .ps-letters.vowel .ps-letter.on {
-    background: var(--vowel); border-color: #ffb3ba; color: #fff;
+    background: linear-gradient(165deg, #ff7d72, #d5333c);
+    border-color: #ffc0bb; color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.42), 0 5px 16px rgba(217, 60, 70, .48);
   }
   /* Rarely ends a word. Dimmed as a nudge, never disabled - UFLI uses
      pseudowords deliberately, so a teacher must still be able to pick `vog`. */
-  .ps-letter.rare { opacity: .42; }
+  .ps-letter.rare { opacity: .38; }
   .ps-letter.rare.on { opacity: 1; }
 
   .ps-presets {
     display: flex; gap: 8px; align-items: center; justify-content: center;
     flex-wrap: wrap; margin: 3vh 0 2vh;
   }
-  .ps-presets label { opacity: .72; font-size: 14px; }
+  .ps-presets label { opacity: .74; font-size: 14px; }
   .ps-presets select {
-    min-width: 190px; padding: 8px 10px; border-radius: 9px;
-    background: #0c2d47; color: var(--ink); border: 1px solid var(--line);
+    min-width: 200px; padding: 9px 11px; border-radius: 11px;
+    background: rgba(10, 44, 70, .85); color: var(--ink);
+    border: 1px solid rgba(120, 190, 225, .38);
   }
   .ps-presets button {
-    padding: 8px 14px; border-radius: 9px; cursor: pointer;
-    background: #10405f; color: var(--ink); border: 1px solid var(--line);
+    padding: 9px 15px; border-radius: 11px; cursor: pointer;
+    background: rgba(18, 72, 106, .85); color: var(--ink);
+    border: 1px solid rgba(120, 190, 225, .38);
+    transition: background .14s;
   }
-  .ps-presets button:hover { background: #17577f; }
+  .ps-presets button:hover { background: rgba(30, 110, 156, .95); }
 
+  /* The Start button is the one unmistakably warm, inviting object - it reads
+     like a bubble about to be released. */
   .ps-start {
-    margin-top: 1vh; padding: 16px 60px; border: 0; border-radius: 999px;
-    background: linear-gradient(180deg, #37c6ff, #0f86cf); color: #022036;
-    font-size: clamp(20px, 2.6vw, 32px); font-weight: 800; cursor: pointer;
-    box-shadow: 0 8px 26px rgba(23, 150, 214, .42);
+    margin-top: 1vh; padding: 17px 66px; border: 0; border-radius: 999px;
+    background: radial-gradient(circle at 34% 26%, #bdf4ff 0%, #4ecdf5 34%, #0f8fd4 78%);
+    color: #022036;
+    font-size: clamp(20px, 2.6vw, 33px); font-weight: 800; cursor: pointer;
+    box-shadow: 0 10px 30px rgba(28, 168, 230, .5), inset 0 2px 0 rgba(255,255,255,.55);
+    transition: transform .12s, box-shadow .18s, filter .2s;
   }
-  .ps-start:disabled { filter: grayscale(.8); opacity: .5; cursor: not-allowed; box-shadow: none; }
+  .ps-start:hover { transform: translateY(-2px); box-shadow: 0 14px 38px rgba(28, 168, 230, .62), inset 0 2px 0 rgba(255,255,255,.6); }
+  .ps-start:active { transform: translateY(0) scale(.98); }
+  .ps-start:disabled { filter: grayscale(.85); opacity: .45; cursor: not-allowed; box-shadow: none; transform: none; }
+
   .ps-warn { color: #ffb3ba; margin-top: 10px; font-size: 15px; }
 </style>
 </head>

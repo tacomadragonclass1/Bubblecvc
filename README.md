@@ -77,6 +77,32 @@ The last-used selection is restored automatically.
 
 ---
 
+## Art direction
+
+An enchanted underwater diorama, built in three depth layers. The composition
+rule that governs everything: **the centre of the frame belongs to the bubbles.**
+
+| Layer | Depth | Job |
+| --- | --- | --- |
+| Foreground | z −14…−20 | Big, dark blue-black silhouettes along the bottom edge. They frame the shot and give the eye something near to measure against. |
+| Midground | z −24…−48 | The coral gardens — the only place warm colour lives. Confined to the bottom corners. |
+| Background | z −58…−78 | Two hazy reef bands, low contrast, for scale only. |
+
+**Warm colour is rationed.** Coral pink, amber and a little lavender appear only
+in the midground clusters. A scene that is warm everywhere stops reading as
+underwater — the deep sapphire has to dominate for the aquamarine to mean
+anything.
+
+The water is a four-stop depth ramp (pale aquamarine surface → turquoise →
+sapphire → near-black floor) with leaning god rays, two counter-drifting caustic
+layers, and a gentle elliptical vignette. Rendering is ACES tone-mapped at
+exposure 1.12 so the bright rim and caustics roll off instead of clipping flat.
+
+Lighting is a deliberate three-light rig: a warm key from above matching the god
+rays, a **hemisphere light** carrying aqua from above and deep blue bounce from
+below (this is what keeps shadowed faces coloured rather than grey), and a cold
+rim from behind that separates the dice and bubbles from the water.
+
 ## Load-bearing decisions — do not undo
 
 ### ⛔ The die orientation clamp
@@ -88,6 +114,47 @@ confusion the lesson exists to prevent. Pitch and yaw get a gentle wobble becaus
 neither can mirror a letter — they only foreshorten it.
 
 If you ever add "satisfying" tumbling to the flick, you have broken the app.
+
+### ⭐ The bubble shader is Fresnel-gated, with a non-zero F0
+
+`fres = 0.065 + 0.935 * pow(1 - cosT, 3)` in `src/bubbles.js`. That `0.065` is
+the single most important number in the file. Thin-film interference is only
+visible in what the film **reflects**, so the colour is multiplied by Fresnel —
+which is what keeps the middle transparent enough to read a letter through.
+
+Set F0 to 0 and the bubble becomes a bare outline with a dead grey middle. A real
+soap film still reflects ~6% face-on, and that 6% is exactly what carries the
+iridescence across the body. Both failure modes were rendered and looked at
+during this work.
+
+Colour comes from sampling three wavelengths through the interference equation,
+not from a hue ramp — that is where the magentas and golds come from. Film
+thickness drains toward the bottom and flows on two noise octaves, sweeping
+through several interference orders so the bubble is marbled rather than tinted.
+
+### ⭐ The pop tears, it does not glow
+
+Four phases in `stepPop`, ~0.76s total: anticipation (inward squeeze, rim
+tightens, film thins toward blue) → rupture (elastic expansion while holes open
+from the thinnest areas outward) → empty → reform at the exact home position.
+`src/pop.js` adds a thin-film shockwave ring and ~54 droplets that burst outward
+and then rise, because that is what water does.
+
+An earlier version added a bright white flash across the whole sphere and the
+bursting bubble read as a ball of frosted glass. The **holes** have to do the
+work. The flash that remains is narrow, brief, and tinted by the film's own
+interference colour.
+
+⛔ **The slot is released at the START of the pop, not the end.** The burst is
+decoration over an already-completed state change, so a teacher mid-chain never
+waits on an animation. A bubble also accepts a new die once it is *reforming* —
+without that, a die thrown during the burst silently failed.
+
+### ⭐ Bubble radius is a SCALE, never baked into the geometry
+
+The mesh is a unit sphere scaled by `b.r`. Radius is recomputed from the viewport
+on every resize, and a baked geometry cannot follow it — that shipped a portrait
+layout where the bubbles kept their landscape size and overlapped into a tangle.
 
 ### ⭐ Bubbles track the bay columns
 
@@ -147,6 +214,38 @@ and `ot` as sounds rather than letter names, and whether nonsense words like
 `vog` come out phonetically. Verify by ear before trusting it.
 
 ---
+
+## Performance
+
+Measured from `renderer.info`, not estimated:
+
+| | Before this pass | After |
+| --- | --- | --- |
+| Draw calls (full board) | 543 | **184** |
+| Draw calls (empty board) | — | 145 |
+| Triangles | 50,454 | 51,354 |
+| Geometries | 295 | 106 |
+
+The reef was drawing a separate mesh per coral segment, kelp blade and anemone
+tentacle. With only ~50k triangles that made it **draw-call bound**, which is the
+worst case for the weak SoC behind a classroom panel. Three fixes:
+
+- A small `mergeInto` / `mergeGeometries` pair in `src/reef.js` (three.js keeps
+  `BufferGeometryUtils` in `examples/`, which this project does not vendor).
+  Anything that does not animate on its own is baked at build time.
+- **Kelp is one mesh per strand**, bent in a vertex shader from vertex height.
+  Cheaper than the old nine-hinge chain *and* smoother — a continuous curve.
+- **Dice went from 6 draw calls to 3** by collapsing the box's six material
+  groups: three.js issues one call per group, and a die only uses two materials.
+
+Session cycling (setup → play → setup, six times) leaks **zero** geometries and
+zero textures — per-die materials and per-bubble shader materials are disposed,
+while the shared rounded-box geometry and the cached glyph textures are kept.
+
+⚠️ **Frame rate was NOT measured.** The remote devtools bridge throttles
+`requestAnimationFrame` to roughly 1 Hz, so any FPS number taken through it is
+meaningless (a measurement attempt returned "1 fps"). Draw calls and triangle
+counts are real. Real frame rate needs checking on the actual panel.
 
 ## Layout
 

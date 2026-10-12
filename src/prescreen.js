@@ -62,6 +62,7 @@ export function createPrescreen(root, onStart) {
   const el = document.createElement('div');
   el.className = 'prescreen';
   el.innerHTML = `
+    <div class="ps-bubbles"></div>
     <div class="ps-inner">
       <h1>Bubble Blending Board</h1>
       <p class="ps-sub">Choose the letters for this lesson, then press Start.</p>
@@ -184,6 +185,20 @@ export function createPrescreen(root, onStart) {
       refreshPresetList();
     }
   });
+
+  // Decorative rising bubbles. Built here rather than in markup so the sizes
+  // and timings can be randomised - a fixed set reads as a repeating loop.
+  const bub = el.querySelector('.ps-bubbles');
+  for (let i = 0; i < 16; i++) {
+    const b = document.createElement('i');
+    const size = 10 + Math.random() * 52;
+    b.style.width = b.style.height = size + 'px';
+    b.style.left = Math.random() * 100 + '%';
+    b.style.setProperty('--dx', (Math.random() * 8 - 4) + 'vw');
+    b.style.animationDuration = (13 + Math.random() * 20) + 's';
+    b.style.animationDelay = (-Math.random() * 28) + 's';
+    bub.appendChild(b);
+  }
 
   refreshPresetList();
   paint();

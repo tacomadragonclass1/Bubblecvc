@@ -45,33 +45,65 @@ const waterFrag = /* glsl */`
   void main() {
     vec2 uv = vUv;
 
-    // Depth gradient: bright sunlit surface up top, deep blue below. The dark
-    // floor matters - it is what the white letter strokes read against.
-    vec3 shallow = vec3(0.16, 0.62, 0.78);
-    vec3 mid     = vec3(0.05, 0.30, 0.52);
-    vec3 deep    = vec3(0.01, 0.08, 0.20);
-    vec3 col = mix(mid, shallow, smoothstep(0.45, 1.0, uv.y));
-    col = mix(deep, col, smoothstep(0.0, 0.55, uv.y));
+    // ---- depth ramp --------------------------------------------------------
+    // Four stops, not two. A single gradient reads as wallpaper; a ramp with a
+    // bright shallow band, a saturated mid, and a near-black floor gives the
+    // scene somewhere to BE deep, which is what sells volume.
+    vec3 surface = vec3(0.38, 0.88, 0.92);   // pale aquamarine, sunlit
+    vec3 shallow = vec3(0.10, 0.60, 0.74);   // brilliant turquoise
+    vec3 mid     = vec3(0.03, 0.26, 0.50);   // deep sapphire
+    vec3 abyss   = vec3(0.005, 0.045, 0.14); // near-black blue floor
 
-    // God rays: a few wide, slow, overlapping shafts leaning off vertical.
+    vec3 col = mix(abyss, mid, smoothstep(0.0, 0.42, uv.y));
+    col = mix(col, shallow, smoothstep(0.34, 0.80, uv.y));
+    col = mix(col, surface, smoothstep(0.80, 1.0, uv.y) * 0.55);
+
+    // ---- god rays ----------------------------------------------------------
+    // Leaning shafts of different widths. The narrow ones are brighter and move
+    // slightly faster, which reads as light through a moving surface.
     float rays = 0.0;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
       float fi = float(i);
-      float x = uv.x * (2.2 + fi * 0.7) + uv.y * 0.55 + uTime * (0.013 + fi * 0.004);
-      rays += pow(max(sin(x * 3.14159) * 0.5 + 0.5, 0.0), 7.0) * (0.5 - fi * 0.12);
+      float w  = 2.0 + fi * 0.85;
+      float x = uv.x * w + uv.y * (0.62 + fi * 0.07) + uTime * (0.016 + fi * 0.005);
+      float shaft = pow(max(sin(x * 3.14159) * 0.5 + 0.5, 0.0), 9.0 - fi);
+      rays += shaft * (0.55 - fi * 0.10);
     }
-    rays *= smoothstep(0.0, 0.85, uv.y);          // only from above
-    col += vec3(0.55, 0.85, 0.95) * rays * 0.26;
+    rays *= smoothstep(-0.05, 0.9, uv.y);
+    // Warm the rays very slightly - sunlight through water is not pure cyan,
+    // and this is what stops the whole frame reading as one flat hue.
+    col += vec3(0.80, 0.94, 0.88) * rays * 0.17;
 
-    // Caustic shimmer, strongest near the surface.
-    vec2 cp = uv * uAspect * 5.0;
-    float c = noise(cp + vec2(uTime * 0.07, uTime * 0.045));
-    c = pow(c, 2.4);
-    col += vec3(0.4, 0.75, 0.85) * c * 0.16 * smoothstep(0.1, 1.0, uv.y);
+    // ---- caustics ----------------------------------------------------------
+    // Two layers drifting against each other at different scales, ridged so the
+    // bright lines are thin. This is the single biggest "underwater" cue.
+    // ⛔ max() before pow() is NOT optional. GLSL pow() with a negative base is
+    // undefined, and this expression goes negative wherever the two noise layers
+    // diverge - which rendered as large black blobs torn across the water.
+    vec2 cp = uv * uAspect * 4.2;
+    float c1 = noise(cp * 1.0 + vec2(uTime * 0.075, uTime * 0.05));
+    float c2 = noise(cp * 1.9 - vec2(uTime * 0.055, uTime * 0.085));
+    float ridge = max(0.0, 1.0 - abs(c1 - c2) * 2.6);
+    float caustic = pow(ridge, 6.0);
+    caustic *= smoothstep(0.02, 0.75, uv.y);
+    col += vec3(0.50, 0.90, 0.98) * caustic * 0.17;
 
-    // Vignette, so attention falls to the middle where the bubbles live.
-    float v = distance(uv, vec2(0.5)) ;
-    col *= 1.0 - smoothstep(0.42, 0.95, v) * 0.45;
+    // A much larger, softer wash for low-frequency variation, so the water is
+    // never uniformly lit across a big panel. Kept near 1.0 - this is a gentle
+    // modulation, not a second light.
+    float wash = noise(uv * uAspect * 1.15 + vec2(uTime * 0.02, uTime * 0.014));
+    col *= 0.94 + wash * 0.13;
+
+    // ---- distance haze -----------------------------------------------------
+    // Atmospheric perspective: the far water lifts toward the mid blue, which
+    // is what makes the foreground creatures read as nearer.
+    col = mix(col, mid * 1.15, 0.12);
+
+    // ---- vignette ----------------------------------------------------------
+    // Elliptical and gentle, pulling attention to the bubble row.
+    vec2 vp = (uv - vec2(0.5, 0.56)) * vec2(1.0, 1.25);
+    float v = length(vp);
+    col *= 1.0 - smoothstep(0.34, 0.92, v) * 0.52;
 
     gl_FragColor = vec4(col, 1.0);
   }
@@ -292,17 +324,29 @@ export function createOcean(scene, bounds) {
   spawn(makeOctopus(0.85), LANES[3], 1.2, 0.5);
   spawn(makeShark(0.9), LANES[4], 1.9, 0.35);
 
-  // Soft light from above, matching the god rays.
-  const key = new THREE.DirectionalLight(0xbfefff, 1.25);
-  key.position.set(-0.3, 1, 0.55);
+  // ---- lighting ----------------------------------------------------------
+  // A three-light rig, built to do a specific job rather than "look lit":
+  //   key  - the sun, from above and slightly left, matching the god rays
+  //   hemi - the water itself: aqua from above, deep blue bounce from below.
+  //          This is what keeps shadowed faces coloured instead of grey.
+  //   rim  - a cold back-edge that separates dice and bubbles from the water
+  const key = new THREE.DirectionalLight(0xfff1d6, 2.1);
+  key.position.set(-0.35, 1.0, 0.62);
   scene.add(key);
-  const fill = new THREE.AmbientLight(0x2d5f80, 1.5);
+
+  const hemi = new THREE.HemisphereLight(0x8ff0ff, 0x05284a, 1.5);
+  scene.add(hemi);
+
+  const fill = new THREE.AmbientLight(0x2f6f96, 0.55);
   scene.add(fill);
-  const rim = new THREE.DirectionalLight(0x0d3a5c, 0.6);
-  rim.position.set(0.4, -0.8, -0.6);
+
+  // Placed BEHIND the play plane so it catches the top edge of the dice and the
+  // far side of the bubble film.
+  const rim = new THREE.DirectionalLight(0x6fd6ff, 1.35);
+  rim.position.set(0.55, 0.35, -0.9);
   scene.add(rim);
 
-  return { group, swimmers, motes, lights: { key, fill, rim } };
+  return { group, swimmers, motes, lights: { key, hemi, fill, rim } };
 }
 
 function resetSwimmer(m, bounds, anywhere = false) {

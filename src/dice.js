@@ -28,44 +28,74 @@ const MAX_PITCH = 0.14;   // ~8 degrees, tilt toward/away from the reader
 const MAX_YAW   = 0.17;   // ~10 degrees, turn left/right
 const MAX_ROLL  = 0.028;  // ~1.6 degrees - a hint of life, never a mirror
 
-const CONSONANT_COLOR = 0x1f6dd0;
-const VOWEL_COLOR     = 0xd92f3f;
+// Palette. Consonants are a deep toy-blue that sits INSIDE the water's own
+// hue family, so they read as belonging to the world; vowels are a warm coral
+// that is the scene's only strong warm note at this scale, which is what makes
+// the vowel position instantly findable across a classroom.
+const CONSONANT_COLOR = 0x2563c9;
+const VOWEL_COLOR     = 0xef4d52;
 
 const texCache = new Map();
 
-/** Die-face texture: the glyph in white on the die's own colour. */
+/**
+ * Die-face texture. Built at high resolution with a painted inner bevel, so the
+ * face reads as a moulded toy tile rather than a flat colour with a decal.
+ */
 function faceTexture(ch, hex) {
   const key = ch + ':' + hex;
   if (texCache.has(key)) return texCache.get(key);
 
-  const S = 256;
+  const S = 512;
   const cv = document.createElement('canvas');
   cv.width = cv.height = S;
   const g = cv.getContext('2d');
 
-  // Slightly lighter centre so the face reads as lit rather than flat.
-  const grd = g.createRadialGradient(S * 0.42, S * 0.36, S * 0.05, S * 0.5, S * 0.5, S * 0.72);
   const base = new THREE.Color(hex);
-  const lit = base.clone().offsetHSL(0, 0.02, 0.1);
+  const lit  = base.clone().offsetHSL(0, 0.03, 0.14);
+  const deep = base.clone().offsetHSL(0, 0.02, -0.14);
+
+  // Body: light falling from upper-left, as the key light does.
+  const grd = g.createLinearGradient(0, 0, S * 0.35, S);
   grd.addColorStop(0, '#' + lit.getHexString());
-  grd.addColorStop(1, '#' + base.getHexString());
+  grd.addColorStop(0.55, '#' + base.getHexString());
+  grd.addColorStop(1, '#' + deep.getHexString());
   g.fillStyle = grd;
   g.fillRect(0, 0, S, S);
 
-  // The glyph, drawn from the shared school-print centrelines. A dark halo goes
-  // down first: white-on-blue alone washed out once the standard material's
-  // lighting dimmed the face, and these letters have to carry across a room.
-  const glyph = glyphCanvas(ch, S, 13);
+  // Painted bevel: a bright inner edge top-left, a dark one bottom-right. This
+  // is what gives the tile its moulded, tactile look at a glance.
+  const inset = S * 0.055;
+  g.lineWidth = S * 0.045;
+  g.strokeStyle = 'rgba(255,255,255,0.30)';
+  g.beginPath();
+  g.moveTo(inset, S - inset); g.lineTo(inset, inset); g.lineTo(S - inset, inset);
+  g.stroke();
+  g.strokeStyle = 'rgba(0,0,0,0.26)';
+  g.beginPath();
+  g.moveTo(S - inset, inset); g.lineTo(S - inset, S - inset); g.lineTo(inset, S - inset);
+  g.stroke();
+
+  // Soft sheen across the upper third.
+  const sheen = g.createRadialGradient(S * 0.34, S * 0.2, 0, S * 0.34, S * 0.2, S * 0.62);
+  sheen.addColorStop(0, 'rgba(255,255,255,0.20)');
+  sheen.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = sheen;
+  g.fillRect(0, 0, S, S);
+
+  // The glyph, from the shared school-print centrelines. A dark blurred halo
+  // goes down first: plain white-on-blue washed out once the material lighting
+  // dimmed the face, and these letters must carry across a classroom.
+  const glyph = glyphCanvas(ch, S, 26);
   g.save();
-  g.globalAlpha = 0.5;
-  g.filter = 'blur(5px)';
+  g.globalAlpha = 0.55;
+  g.filter = 'blur(9px)';
   g.globalCompositeOperation = 'multiply';
   g.drawImage(glyph, 0, 0);
   g.restore();
   g.drawImage(glyph, 0, 0);
 
   const tex = new THREE.CanvasTexture(cv);
-  tex.anisotropy = 8;
+  tex.anisotropy = 16;
   tex.colorSpace = THREE.SRGBColorSpace;
   texCache.set(key, tex);
   return tex;
@@ -77,7 +107,7 @@ function faceTexture(ch, hex) {
  * each vertex onto a rounded-cube surface. Face groups and UVs survive, which is
  * what lets the letter still map to face 4 alone.
  */
-function roundedBox(size, radius, seg = 5) {
+function roundedBox(size, radius, seg = 9) {
   const geo = new THREE.BoxGeometry(size, size, size, seg, seg, seg);
   const pos = geo.attributes.position;
   const h = size / 2;
@@ -104,21 +134,42 @@ export function createDie(ch) {
   const isVowel = VOWELS.includes(ch);
   const hex = isVowel ? VOWEL_COLOR : CONSONANT_COLOR;
 
-  if (!sharedGeo) sharedGeo = roundedBox(DIE_SIZE, DIE_SIZE * 0.16);
+  if (!sharedGeo) {
+    sharedGeo = roundedBox(DIE_SIZE, DIE_SIZE * 0.19);
+    // ⭐ A BoxGeometry has six material groups, and three.js issues one draw
+    // call PER GROUP - so every die cost six calls even though it only uses two
+    // materials. The lettered face is group 4 (+z), so collapsing the five plain
+    // faces into the runs either side of it takes a die from 6 calls to 3.
+    const groups = sharedGeo.groups.slice();
+    const letterGroup = groups[4];
+    const before = letterGroup.start;
+    const after = letterGroup.start + letterGroup.count;
+    const total = groups.reduce((n, g) => n + g.count, 0);
+    sharedGeo.clearGroups();
+    if (before > 0) sharedGeo.addGroup(0, before, 0);
+    sharedGeo.addGroup(before, letterGroup.count, 1);
+    if (total > after) sharedGeo.addGroup(after, total - after, 0);
+  }
 
-  const plain = new THREE.MeshStandardMaterial({
-    color: hex, roughness: 0.34, metalness: 0.12,
+  // Clearcoat is what makes these read as moulded plastic toys rather than
+  // matte blocks: a second specular lobe over a slightly rough body.
+  const plain = new THREE.MeshPhysicalMaterial({
+    color: hex, roughness: 0.42, metalness: 0.0,
+    clearcoat: 0.85, clearcoatRoughness: 0.18,
+    sheen: 0.3, sheenColor: new THREE.Color(0x9fd8ff),
   });
   const letterTex = faceTexture(ch, hex);
-  const lettered = new THREE.MeshStandardMaterial({
-    map: letterTex, roughness: 0.3, metalness: 0.1,
+  const lettered = new THREE.MeshPhysicalMaterial({
+    map: letterTex, roughness: 0.36, metalness: 0.0,
+    clearcoat: 0.9, clearcoatRoughness: 0.14,
     // The face is also its own emissive map, so the glyph stays bright no
     // matter where the key light happens to be. Legibility beats realism.
     emissive: 0xffffff, emissiveMap: letterTex, emissiveIntensity: 0.34,
   });
 
-  // BoxGeometry group order: +x, -x, +y, -y, +z, -z. The reader faces +z.
-  const mats = [plain, plain, plain, plain, lettered, plain];
+  // Two materials now, indexed by the collapsed groups above: 0 = plain body,
+  // 1 = the lettered +z face the reader sees.
+  const mats = [plain, lettered];
 
   const mesh = new THREE.Mesh(sharedGeo, mats);
   mesh.userData = {
@@ -140,13 +191,21 @@ export function createDie(ch) {
  * (0) or a flying die look a little more energetic (up to ~1.6) WITHOUT ever
  * escaping the roll clamp.
  */
-export function applyWobble(die, t) {
+export function applyWobble(die, t, camZ = 0) {
   const u = die.userData;
   const s = u.wobbleScale;
   if (s <= 0.001) {
-    // Captured dice are perfectly square to the reader. This is deliberate:
-    // the locked word must be the most legible thing on screen.
-    die.rotation.set(0, 0, 0);
+    // Captured dice are square to the reader. This is deliberate: the locked
+    // word must be the most legible thing on screen.
+    //
+    // The yaw term is perspective compensation, not decoration. A magnified die
+    // parked near the left or right edge is seen from an angle by a centred
+    // perspective camera, and its letter foreshortens. Turning it partway back
+    // toward the camera recovers the legibility while keeping enough of the
+    // angle to read as a solid object. Yaw is a SAFE axis - it cannot mirror a
+    // glyph, only foreshorten it - so this does not touch the roll clamp.
+    const yaw = camZ ? -Math.atan2(die.position.x, camZ) * 0.62 : 0;
+    die.rotation.set(0, yaw, 0);
     return;
   }
   const p = u.phase;
@@ -169,6 +228,19 @@ export function assertReadable(die) {
       die.userData.ch, r.x.toFixed(3), r.y.toFixed(3), r.z.toFixed(3));
   }
   return !bad;
+}
+
+/**
+ * Release a die's GPU resources.
+ *
+ * ⛔ The shared rounded-box geometry and the cached face textures are NOT
+ * disposed - they are reused by every die in every session, and tearing them
+ * down here would force a rebuild of all 26 glyph canvases each time a teacher
+ * returns to the setup screen. Only the per-die materials are owned by the die.
+ */
+export function disposeDie(die) {
+  const mats = Array.isArray(die.material) ? die.material : [die.material];
+  for (const m of mats) if (m && m.dispose) m.dispose();
 }
 
 // ------------------------------------------------------------------ the bay

@@ -14,6 +14,7 @@
 //     delightful thing in the game and it must not be designed away.
 
 import * as THREE from '../vendor/three.module.js';
+import { canAccept } from './bubbles.js';
 
 export const GRAVITY = -17.0;
 const DRAG = 0.42;            // per second, velocity-proportional
@@ -56,7 +57,7 @@ export function stepFlight(die, dt, ctx) {
 
   // Magnet toward the slot this letter is destined for. Only the target slot
   // pulls - a `c` drifting past the vowel bubble must not be swallowed by it.
-  const target = bubbles.find(b => b.index === targetSlot && !b.die && b.popping <= 0);
+  const target = bubbles.find(b => b.index === targetSlot && canAccept(b));
   let event = null;
 
   if (target) {

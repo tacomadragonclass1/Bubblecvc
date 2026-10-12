@@ -16,17 +16,19 @@
 
 import * as THREE from '../vendor/three.module.js';
 import { createOcean, updateOcean, makeWater } from './ocean.js';
-import { createBubbles, updateBubbles, fillBubble, popBubble, bubbleAt, bubbleHit, layoutFor } from './bubbles.js';
-import { createDie, applyWobble, layoutBay, COLUMN, DIE_SIZE } from './dice.js';
+import { createReef, updateReef } from './reef.js';
+import { createBubbles, updateBubbles, fillBubble, popBubble, bubbleHit, layoutFor, resizeBubbles, disposeBubbles } from './bubbles.js';
+import { createDie, applyWobble, layoutBay, DIE_SIZE, disposeDie } from './dice.js';
 import * as P from './physics.js';
 import * as A from './audio.js';
 import { createPrescreen } from './prescreen.js';
+import { createPopFX } from './pop.js';
 
 const FOV = 45;
 const CAM_Z = 26;
 
 let renderer, scene, camera, waterScene, waterCam, water;
-let ocean, bubbleSet, bubbles;
+let ocean, reef, bubbleSet, bubbles, popFX;
 let bounds = { x: 19, y: 10.8 };
 let bayTop = -4.6;
 let dice = [];                 // every die currently in the bay or in motion
@@ -35,15 +37,35 @@ let prescreen, homeBtn, replayBtn;
 let running = false;
 let clock = null;
 let lastSpoken = '';           // guards against re-speaking the same state
+// Debug only, driven from window.__bubblecvc.timeScale. Lets the pop sequence
+// be watched frame by frame - the timing in pop.js was tuned this way.
+let timeScale = 1;
+let bubbleY = 0;
 
 const SLOTS = 3;
+
+// Respected throughout the idle animations and the pop. Motion is reduced, never
+// removed: the bubbles still have to read as suspended in water.
+const reducedMotion = window.matchMedia
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // --------------------------------------------------------------------- setup
 function init() {
   const canvas = document.getElementById('stage');
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-  renderer.setClearColor(0x04253f, 1);
+  renderer = new THREE.WebGLRenderer({
+    canvas, antialias: true, alpha: false,
+    powerPreference: 'high-performance',
+  });
+  renderer.setClearColor(0x031d33, 1);
+  // Cap DPR at 2: a classroom panel is enormous and a 3x buffer buys nothing
+  // visible while costing a lot of fill rate on a weak TV SoC.
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // ACES keeps the bright caustics and the bubble rim from clipping to flat
+  // white, which is what made the first pass look like a web demo rather than
+  // a rendered scene. Exposure is slightly over 1 so the water stays luminous.
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.12;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 200);
@@ -59,7 +81,9 @@ function init() {
   resize();
   window.addEventListener('resize', resize);
 
+  reef = createReef(scene, bounds, CAM_Z);
   ocean = createOcean(scene, bounds);
+  popFX = createPopFX(scene);
 
   prescreen = createPrescreen(document.body, startSession);
   homeBtn = document.getElementById('home');
@@ -79,7 +103,12 @@ function resize() {
 
   const halfH = CAM_Z * Math.tan(THREE.MathUtils.degToRad(FOV / 2));
   bounds = { x: halfH * camera.aspect, y: halfH };
-  bayTop = -bounds.y * 0.42;
+  // In portrait the bubbles are necessarily smaller (width is the constraint),
+  // so the row drops toward the middle - otherwise a tall screen shows a big
+  // dead band between the bubbles and the bay.
+  const portrait = bounds.x < bounds.y * 1.2;
+  bubbleY = bounds.y * (portrait ? 0.14 : 0.34);
+  bayTop = -bounds.y * (portrait ? 0.50 : 0.42);
 
   water.material.uniforms.uAspect.value.set(Math.max(1, camera.aspect), 1);
 
@@ -107,9 +136,15 @@ function startSession(chosen) {
 
 function endSession() {
   running = false;
-  for (const d of dice) scene.remove(d);
+  // A classroom session goes setup -> play -> setup many times in one lesson, so
+  // the per-session materials have to be released or the GPU slowly fills up.
+  for (const d of dice) { scene.remove(d); disposeDie(d); }
   dice = [];
-  if (bubbleSet) { scene.remove(bubbleSet.group); bubbleSet = null; bubbles = null; }
+  if (bubbleSet) {
+    scene.remove(bubbleSet.group);
+    disposeBubbles(bubbleSet);
+    bubbleSet = null; bubbles = null;
+  }
   homeBtn.hidden = true;
   replayBtn.hidden = true;
   homeArmed = false;
@@ -118,13 +153,13 @@ function endSession() {
 }
 
 function buildBubbles() {
-  if (bubbleSet) scene.remove(bubbleSet.group);
-  bubbleSet = createBubbles(scene, layoutFor(SLOTS, bounds, bounds.y * 0.30));
+  if (bubbleSet) { scene.remove(bubbleSet.group); disposeBubbles(bubbleSet); }
+  bubbleSet = createBubbles(scene, layoutFor(SLOTS, bounds, bubbleY));
   bubbles = bubbleSet.bubbles;
 }
 
 function buildBay() {
-  for (const d of dice) scene.remove(d);
+  for (const d of dice) { scene.remove(d); disposeDie(d); }
   dice = [];
   const sets = [board.onset, board.vowel, board.coda];
   for (const place of layoutBay(sets, bounds, bayTop)) {
@@ -138,11 +173,7 @@ function buildBay() {
 }
 
 function relayout() {
-  const layout = layoutFor(SLOTS, bounds, bounds.y * 0.30);
-  bubbles.forEach((b, i) => {
-    b.home.set(layout[i].x, layout[i].y, 0);
-    b.mesh.position.copy(b.home);
-  });
+  resizeBubbles(bubbles, layoutFor(SLOTS, bounds, bubbleY));
   const sets = [board.onset, board.vowel, board.coda];
   const places = layoutBay(sets, bounds, bayTop);
   let k = 0;
@@ -315,16 +346,18 @@ function speakIfReady() {
 // ---------------------------------------------------------------- main loop
 function frame() {
   const now = performance.now() / 1000;
-  const dt = Math.min(0.05, now - clock.t);
+  const dt = Math.min(0.05, now - clock.t) * timeScale;
   clock.t = now;
   clock.elapsed += dt;
   const t = clock.elapsed;
 
   water.material.uniforms.uTime.value = t;
   updateOcean(ocean, bounds, t, dt);
+  updateReef(reef, t, reducedMotion);
+  if (popFX) popFX.update(dt);
 
   if (running) {
-    updateBubbles(bubbles, t, dt);
+    updateBubbles(bubbles, t, dt, reducedMotion, popFX);
 
     for (const die of dice) {
       const u = die.userData;
@@ -353,7 +386,7 @@ function frame() {
           P.stepReturn(die, dt);
           break;
       }
-      if (u.state !== 'captured') applyWobble(die, t);
+      applyWobble(die, t, CAM_Z);
     }
   }
 
@@ -378,11 +411,59 @@ window.__bubblecvc = {
   get slots() { return bubbles ? bubbles.map(b => b.die ? b.die.userData.ch : null) : null; },
   get word() { return currentWord(); },
   get bounds() { return bounds; },
+  /** Renderer statistics - draw calls, triangles, live GPU resources. */
+  get stats() {
+    const i = renderer.info;
+    return {
+      calls: i.render.calls, triangles: i.render.triangles,
+      geometries: i.memory.geometries, textures: i.memory.textures,
+      programs: i.programs ? i.programs.length : null,
+    };
+  },
+  /** Average frame time over N frames, measured on the real loop. */
+  async fps(frames = 90) {
+    const t0 = performance.now();
+    await new Promise(res => { let i = 0; const tick = () => (++i < frames ? requestAnimationFrame(tick) : res()); requestAnimationFrame(tick); });
+    const ms = (performance.now() - t0) / frames;
+    return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(1) };
+  },
+  set timeScale(v) { timeScale = v; },
+  get timeScale() { return timeScale; },
+  /**
+   * Freeze a bubble at an exact point in its pop sequence, for inspection.
+   * Set timeScale to 0 first, then step the phase by hand - chasing a 0.76s
+   * animation with screenshots does not work.
+   */
+  setPopPhase(i, phase) {
+    const b = bubbles && bubbles[i];
+    if (!b) return 'no bubble ' + i;
+    if (b.die) { const d = popBubble(b); P.sendHome(d); }
+    b.popping = 1;
+    b.popT = phase;
+    b.burstFired = false;          // so the ring and droplets still spawn
+    return 'bubble ' + i + ' held at t=' + phase;
+  },
+  get popPhases() {
+    return bubbles ? bubbles.map(b => (b.popping ? +b.popT.toFixed(3) : null)) : null;
+  },
+  /** Pop a slot by index, as a tap would. */
+  popSlot(i) {
+    const b = bubbles && bubbles[i];
+    if (!b || !b.die) return 'slot ' + i + ' is empty';
+    const die = popBubble(b);
+    P.sendHome(die);
+    lastSpoken = '';
+    return 'popped ' + i;
+  },
   get bayTop() { return bayTop; },
   /** Launch a die by letter, in world units per second - bypasses the gesture. */
-  throwDie(ch, vx, vy) {
-    const d = dice.find(x => x.userData.ch === ch && x.userData.state === 'bay');
-    if (!d) return 'no bay die ' + ch;
+  throwDie(ch, vx, vy, col = null) {
+    // `col` disambiguates a letter that appears in more than one column - `t`
+    // is commonly in both the onset and coda sets, and without this the helper
+    // silently grabs whichever one it finds first.
+    const d = dice.find(x => x.userData.ch === ch && x.userData.state === 'bay'
+      && (col === null || x.userData.col === col));
+    if (!d) return 'no bay die ' + ch + (col === null ? '' : ' in col ' + col);
     P.launch(d, vx, vy);
     return 'launched ' + ch;
   },
