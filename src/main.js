@@ -23,12 +23,13 @@ import * as P from './physics.js';
 import * as A from './audio.js';
 import { createPrescreen } from './prescreen.js';
 import { createPopFX } from './pop.js';
+import { loadCreatures } from './creatures.js';
 
 const FOV = 45;
 const CAM_Z = 26;
 
 let renderer, scene, camera, waterScene, waterCam, water;
-let ocean, reef, bubbleSet, bubbles, popFX;
+let ocean, reef, bubbleSet, bubbles, popFX, creatures = null;
 let bounds = { x: 19, y: 10.8 };
 let bayTop = -4.6;
 let dice = [];                 // every die currently in the bay or in motion
@@ -84,6 +85,18 @@ function init() {
   reef = createReef(scene, bounds, CAM_Z);
   ocean = createOcean(scene, bounds);
   popFX = createPopFX(scene);
+
+  // Modelled sea life, if a pack has been dropped in. Asynchronous and entirely
+  // optional: the scene is already running with procedural creatures by the time
+  // this resolves, and if it finds nothing it simply leaves them alone.
+  loadCreatures(renderer).then(lib => {
+    if (!lib) return;
+    creatures = lib;
+    // Rebuild just the swimmers, now that real models are available.
+    scene.remove(ocean.group);
+    ocean = createOcean(scene, bounds, creatures);
+    console.info('[bubblecvc] modelled creatures loaded:', lib.count, lib.kinds.join(', '));
+  });
 
   prescreen = createPrescreen(document.body, startSession);
   homeBtn = document.getElementById('home');
@@ -355,6 +368,7 @@ function frame() {
   updateOcean(ocean, bounds, t, dt);
   updateReef(reef, t, reducedMotion);
   if (popFX) popFX.update(dt);
+  if (creatures) creatures.update(dt);
 
   if (running) {
     updateBubbles(bubbles, t, dt, reducedMotion, popFX);

@@ -295,7 +295,18 @@ function makeMotes(count, spread) {
  * Build the whole backdrop. `bounds` is the visible half-extent of the play
  * plane so creatures can be launched from just outside the screen.
  */
-export function createOcean(scene, bounds) {
+export function createOcean(scene, bounds, creatures = null) {
+  // `creatures` is the optional glTF library from src/creatures.js. When a kind
+  // is present there we use the real model; otherwise we fall back to the
+  // procedural builder for that kind specifically - so a pack containing only
+  // fish still upgrades the fish and leaves the octopus alone.
+  const build = (kind, scale, hue) => {
+    const modelled = creatures && creatures.make(kind, scale);
+    if (modelled) { modelled.userData.kind = kind; return modelled; }
+    if (kind === 'fish') return makeFish(scale, hue);
+    if (kind === 'shark') return makeShark(scale);
+    return makeOctopus(scale);
+  };
   const group = new THREE.Group();
   scene.add(group);
 
@@ -317,12 +328,12 @@ export function createOcean(scene, bounds) {
   // A small, varied cast. Deliberately not a school of forty - motion behind
   // the bubbles has to stay calm enough that it does not pull the eye off the
   // letters.
-  spawn(makeFish(0.75, 0.08), LANES[0], 3.4, 1.1);
-  spawn(makeFish(0.62, 0.14), LANES[1], 2.7, 1.5);
-  spawn(makeFish(0.9, 0.55), LANES[2], 2.2, 0.9);
-  spawn(makeFish(0.55, 0.02), LANES[1], 3.9, 1.8);
-  spawn(makeOctopus(0.85), LANES[3], 1.2, 0.5);
-  spawn(makeShark(0.9), LANES[4], 1.9, 0.35);
+  spawn(build('fish', 0.75, 0.08), LANES[0], 3.4, 1.1);
+  spawn(build('fish', 0.62, 0.14), LANES[1], 2.7, 1.5);
+  spawn(build('fish', 0.90, 0.55), LANES[2], 2.2, 0.9);
+  spawn(build('fish', 0.55, 0.02), LANES[1], 3.9, 1.8);
+  spawn(build('octopus', 0.85), LANES[3], 1.2, 0.5);
+  spawn(build('shark', 0.90), LANES[4], 1.9, 0.35);
 
   // ---- lighting ----------------------------------------------------------
   // A three-light rig, built to do a specific job rather than "look lit":
@@ -376,7 +387,11 @@ export function updateOcean(ocean, bounds, t, dt) {
     const bank = Math.cos(t * 0.6 + u.phase) * 0.12;
     m.rotation.z = u.dir > 0 ? bank : -bank;
 
-    if (u.kind === 'fish' || u.kind === 'shark') {
+    // A modelled creature carries its own baked swim animation - the hand-rolled
+    // tail wag below is only for the procedural fallbacks.
+    if (u.modelled) {
+      // nothing to do: the AnimationMixer drives it
+    } else if (u.kind === 'fish' || u.kind === 'shark') {
       const beat = u.kind === 'shark' ? 2.2 : 5.5;
       u.tail.rotation.y = Math.sin(t * beat + u.phase) * 0.45;
     } else if (u.kind === 'octopus') {

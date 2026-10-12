@@ -281,6 +281,29 @@ ratio or every tap lands somewhere else entirely.
 
 ---
 
+## Modelled sea life (optional)
+
+The procedural fish, shark and octopus are spheres with cones attached. Abstract
+scenery built that way reads fine — rocks, kelp, caustics all work — but anything
+the eye recognises as an **animal** does not. Failed realism looks worse than
+honest abstraction, so the creatures (and only the creatures) can be replaced
+with real CC0 models.
+
+Drop GLB files into `assets/creatures/` and list them in `manifest.json`; see
+`assets/creatures/README.md`. **Entirely optional and fails soft** — no manifest,
+a 404, or a model that will not parse all fall back to the procedural creature
+for that kind specifically, so a pack containing only fish still upgrades the
+fish and leaves the octopus alone.
+
+Verified end to end against a CC0 sample: GLB parsed, skinned mesh found, named
+animation clips read, and `AnimationMixer` driving them. `GLTFLoader`,
+`SkeletonUtils` and `BufferGeometryUtils` are vendored in `vendor/jsm/` with
+their bare `'three'` imports rewritten to the local build.
+
+⛔ **Models are committed, not gitignored.** Pages serves what is in the repo, so
+an ignored model loads locally and 404s in the classroom. CC0 is what makes that
+fine.
+
 ## Not built yet
 
 - **Advanced mode** — CCVC / CVCC. Bubble count is already data-driven (`layoutFor`
