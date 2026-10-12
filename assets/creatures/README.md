@@ -4,7 +4,21 @@ Drop CC0 glTF/GLB sea-life models here and list them in `manifest.json`.
 **Everything here is optional** — with no manifest the app falls back to the
 procedural creatures in `src/ocean.js` and runs exactly as before.
 
-## Where to get them
+## What is shipped here
+
+7 CC0 models from the **Quaternius Animated Fish Pack**, fetched via Poly Pizza
+(which mirrors the pack as GLB; quaternius.com serves FBX/OBJ/Blend only).
+Every one is a single skinned mesh with one `Swim` clip. 528 KB for the set.
+
+| file | used as | note |
+| --- | --- | --- |
+| `fish-a/b/c.glb` | fish | the three background fish |
+| `manta-ray.glb` | fish | scaled up — it is a big animal |
+| `shark.glb` | shark | |
+| `whale.glb` | shark | shares the deep, slow lane |
+| `dolphin.glb` | octopus | the pack has no octopus; the dolphin takes that lane so no procedural creature is left on screen |
+
+## Where to get more
 
 **Quaternius Animated Fish Pack** — CC0, 7 aquatic species, rigged and animated.
 

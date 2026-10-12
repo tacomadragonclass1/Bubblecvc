@@ -67,13 +67,36 @@ export async function loadCreatures(renderer) {
           const box = new THREE.Box3().setFromObject(root);
           const size = new THREE.Vector3();
           box.getSize(size);
+          // ⭐ Normalise to a REAL WORLD SIZE, not to 1.
+          //
+          // Scaling the longest axis to 1 unit seems tidy and is wrong: the
+          // procedural fish these replace are roughly 2-3 world units long, and
+          // the spawn scales in ocean.js (0.55-0.9) assume that. Normalising to
+          // 1 made every creature 3-4x too small - they loaded, animated, and
+          // were effectively invisible at ~20px on a classroom panel.
+          //
+          // The value is larger than the raw procedural size because creatures
+          // live 18-50 units BEHIND the play plane and shrink with distance.
+          const TARGET_LENGTH = 5.6;
           const longest = Math.max(size.x, size.y, size.z) || 1;
-          const norm = 1 / longest;
+          const norm = TARGET_LENGTH / longest;
+
+          // ⛔ The recentring offset is STORED, not applied here.
+          //
+          // Setting root.position = -centre and then scaling the same node is
+          // wrong: a node's position is not affected by its own scale, so the
+          // offset stays at full size while the mesh shrinks - which flung each
+          // fish up to 8 unscaled units away from its lane and made them look
+          // like they had vanished. The offset has to be scaled by the same
+          // factor, which can only happen once the spawn scale is known.
+          const centre = new THREE.Vector3();
+          box.getCenter(centre);
 
           (library[kind] = library[kind] || []).push({
             scene: root,
             clips: gltf.animations || [],
             scale: (spec.scale || 1) * norm,
+            centre,
             yaw: spec.yaw || 0,
             clipName: spec.clip || null,
           });
@@ -108,8 +131,12 @@ export async function loadCreatures(renderer) {
     // rotation.y on the outer object to turn a creature around without having
     // to know anything about how the artist built it.
     const holder = new THREE.Group();
+    const k = v.scale * scale;
     inst.rotation.y = v.yaw;
-    inst.scale.setScalar(v.scale * scale);
+    inst.scale.setScalar(k);
+    // Recentre in the SCALED frame, so the model sits on its lane position
+    // rather than orbiting it.
+    inst.position.copy(v.centre).multiplyScalar(-k);
     holder.add(inst);
 
     if (v.clips.length) {

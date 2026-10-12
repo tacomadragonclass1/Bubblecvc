@@ -14,7 +14,12 @@ import * as THREE from '../vendor/three.module.js';
 // Depth planes. Creatures are spread across these so the water reads as having
 // volume. All are well BEHIND the play plane (z = 0) so nothing ever occludes a
 // letter the child is trying to read.
-const LANES = [-26, -34, -42, -52, -64];
+// ⭐ Lane depth is a SIZE decision as much as a composition one. A creature at
+// z = -64 is 90 units from the camera against the play plane's 26, so it renders
+// at ~29% size - which is why modelled fish that measured correctly in world
+// units still showed up as specks. These are pulled closer so the sea life
+// actually reads, while staying well behind the play plane at z = 0.
+const LANES = [-18, -24, -31, -39, -50];
 
 // ----------------------------------------------------------------- the water
 // A full-screen quad behind everything, running a gradient plus moving light
