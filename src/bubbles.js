@@ -175,7 +175,7 @@ const bubbleFrag = /* glsl */`
   }
 `;
 
-export const BUBBLE_R_MAX = 3.6;
+export const BUBBLE_R_MAX = 4.1;
 
 let unitSphere = null;
 
@@ -469,16 +469,20 @@ export function bubbleAt(bubbles, p, slotFilter = null) {
 
 /** Hit test for a tap - used for popping. Tighter than the capture zone. */
 export function bubbleHit(bubbles, p) {
+  // ⭐ NEAREST, not first. Now that the rims nearly touch, the forgiveness
+  // margins overlap - and returning the first match meant a tap in the overlap
+  // always popped the left-hand bubble, even when the finger was clearly on the
+  // right-hand one. Mid-chain that silently destroys the wrong letter.
+  let best = null, bestD = Infinity;
   for (const b of bubbles) {
     if (b.popping > 0) continue;
     const dx = p.x - b.mesh.position.x;
     const dy = p.y - b.mesh.position.y;
-    // Tap target is the bubble's own radius with a small forgiveness margin.
-    // Bigger bubbles therefore get bigger tap targets for free.
     const rx = b.r * (b.span === 1 ? 1 : 1.62);
-    if ((dx * dx) / (rx * rx) + (dy * dy) / (b.r * b.r) <= 1.12) return b;
+    const d = (dx * dx) / (rx * rx) + (dy * dy) / (b.r * b.r);
+    if (d <= 1.12 && d < bestD) { best = b; bestD = d; }
   }
-  return null;
+  return best;
 }
 
 /**
@@ -498,19 +502,28 @@ export function bubbleHit(bubbles, p) {
 // Portrait is a different composition problem from a classroom panel: width is
 // scarce, height is plentiful. So a narrow viewport spends more of its width on
 // the row and accepts a tighter gap between bubbles.
-const SPREAD_WIDE = 0.78, SPREAD_NARROW = 0.88;
-const R_WIDE = 0.40, R_NARROW = 0.44;
+// ⭐ BUBBLES SIT ALMOST TOUCHING, and that is a pedagogical choice.
+//
+// These three bubbles are a word being BLENDED. Sounds that run together should
+// look like they run together - a row of well-separated spheres reads as three
+// unrelated objects, which is the opposite of what blending teaches. So the gap
+// is a thin sliver of water, just enough to keep each bubble's rim readable as
+// its own closed shape.
+//
+// The old code derived the radius from the pitch and then capped it, which meant
+// the cap silently pushed them apart again on a wide screen. This derives the
+// PITCH FROM THE RADIUS, so the gap is whatever GAP says it is, always.
+const GAP = 0.06;          // sliver between rims, as a fraction of diameter
+const ROW_WIDTH = 0.95;    // how much of the usable width the row may occupy
 
 export function layoutFor(slots, bounds, y) {
-  const portrait = bounds.x < bounds.y * 1.2;
-  const spread = portrait ? SPREAD_NARROW : SPREAD_WIDE;
-  const R_OF_PITCH = portrait ? R_NARROW : R_WIDE;
-  const usable = bounds.x * 2 * spread;
-  const pitch = usable / slots;
-  // Also keep the bubble from growing taller than the space between the bay and
-  // the top of frame, which is what actually bites in a short landscape window.
-  const vertical = (bounds.y - y) * 0.92;
-  const r = Math.min(BUBBLE_R_MAX, pitch * R_OF_PITCH, vertical);
+  // Radius is limited by two things: how much width the row may take, and how
+  // much height there is between the bubble row and the top of frame.
+  const byWidth = (bounds.x * 2 * ROW_WIDTH) / (slots * 2 * (1 + GAP));
+  const byHeight = (bounds.y - y) * 0.92;
+  const r = Math.min(BUBBLE_R_MAX, byWidth, byHeight);
+
+  const pitch = 2 * r * (1 + GAP);
   const w = (slots - 1) * pitch;
   return Array.from({ length: slots }, (_, i) => ({
     x: -w / 2 + i * pitch,
@@ -519,3 +532,4 @@ export function layoutFor(slots, bounds, y) {
     r,
   }));
 }
+

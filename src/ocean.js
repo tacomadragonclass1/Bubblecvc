@@ -421,9 +421,15 @@ export function updateOcean(ocean, bounds, t, dt) {
   for (let i = 0; i < spd.length; i++) {
     let y = pos.array[i * 3 + 1] + spd[i] * dt;
     let x = pos.array[i * 3] + Math.sin(t * 0.5 + i) * 0.012;
+    // Drift toward the camera at the same rate the reef travels, so suspended
+    // matter agrees with the sea floor about which way we are going. Without
+    // this the motes are the one cue that gives away a static camera.
+    let z = pos.array[i * 3 + 2] + 1.45 * dt;
+    if (z > -12) { z = -72; x = (Math.random() - 0.5) * spread.x; }
     if (y > spread.y / 2) { y = -spread.y / 2; x = (Math.random() - 0.5) * spread.x; }
     pos.array[i * 3] = x;
     pos.array[i * 3 + 1] = y;
+    pos.array[i * 3 + 2] = z;
   }
   pos.needsUpdate = true;
 }

@@ -377,7 +377,7 @@ function frame() {
 
   water.material.uniforms.uTime.value = t;
   updateOcean(ocean, bounds, t, dt);
-  updateReef(reef, t, reducedMotion);
+  updateReef(reef, t, reducedMotion, dt);
   if (popFX) popFX.update(dt);
   if (creatures) creatures.update(dt);
 
@@ -436,6 +436,8 @@ window.__bubblecvc = {
   get slots() { return bubbles ? bubbles.map(b => b.die ? b.die.userData.ch : null) : null; },
   get word() { return currentWord(); },
   get bounds() { return bounds; },
+  /** z of each travelling reef band - proves the conveyor is advancing. */
+  get reefZ() { return reef && reef.bands ? reef.bands.map(b => +b.position.z.toFixed(2)) : null; },
   /** Renderer statistics - draw calls, triangles, live GPU resources. */
   get stats() {
     const i = renderer.info;

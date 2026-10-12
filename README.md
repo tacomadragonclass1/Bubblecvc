@@ -186,6 +186,47 @@ Because `S` is baked at build time, a resize **disposes and rebuilds** the reef,
 debounced by 320ms — a drag-resize fires continuously and rebuilding a few
 hundred merged geometries per frame would lock the tab.
 
+### ⭐ The bubbles sit ALMOST TOUCHING, and that is pedagogical
+
+Three bubbles holding a word are a word being **blended**. Sounds that run
+together should look like they run together — a row of well-separated spheres
+reads as three unrelated objects, which is the opposite of what blending teaches.
+The gap is a 6% sliver, just enough that each rim still closes as its own shape.
+
+`layoutFor` derives the **pitch from the radius**, not the other way round. The
+old code did the reverse and then capped the radius, which meant the cap silently
+pushed the bubbles apart again on a wide screen — the spacing you asked for
+quietly became the spacing the cap allowed.
+
+Because the rims nearly touch, the tap margins overlap, so `bubbleHit` returns
+the **nearest** bubble rather than the first match. Returning the first meant a
+tap in the overlap always popped the left-hand bubble — mid-chain that silently
+destroys the wrong letter.
+
+### ⭐ The reef travels; the gameplay does not
+
+The camera never moves. The reef streams toward it on a recycling conveyor
+(`bands` in `src/reef.js`), which gives "swimming forward over a reef" while
+leaving the play plane at z = 0 completely untouched — bubbles and dice do not
+drift, do not change size, and every capture radius and tap target stays put.
+Moving the real camera would have forced the whole play plane to chase it.
+
+Conveyor content lives in **true world coordinates**, unlike the static horizon
+which is still screen-placed. That difference is the point: a cluster should grow
+and sink out of frame as it approaches.
+
+⛔ **The sea floor is at y = −40 for a reason.** A cluster is ~15 world units
+tall and the visible half-height at these depths is only 23–50, so a floor at
+−22 put coral straight through the bubble row. At −40 the gardens sit in the
+bottom third at the far end and slide out of the bottom of frame as they
+approach, so bands leave the shot on their own and never need fading.
+
+⛔ **Merge each band internally only.** Merging across bands welds them into one
+mesh and they can no longer travel independently.
+
+Motes drift forward at the same rate, because suspended matter that disagrees
+with the sea floor about which way you are going gives away the static camera.
+
 ### ⭐ Bubbles track the bay columns
 
 Bubble x positions are the bay column centres pulled 52% toward the middle

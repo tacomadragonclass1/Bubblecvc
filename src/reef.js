@@ -378,69 +378,52 @@ function makeDistantReef(width) {
   return new THREE.Mesh(geo, m);
 }
 
-/**
- * ⭐ DEPTH-AWARE PLACEMENT. This is the thing that was wrong on the first pass
- * and it is worth stating plainly: positions and scales expressed in play-plane
- * units DO NOT transfer to objects sitting further from the camera.
- *
- * A perspective camera shrinks everything by distance, so a rock placed at
- * y = -10 and z = -28 does not appear at the bottom of frame - it appears
- * halfway up it, at half size. The first reef looked like a row of tiny
- * ornaments floating behind the letter bay for exactly this reason.
- *
- * `factor` converts: to APPEAR at play-plane position p, an object at depth z
- * must be placed at p * (camZ - z) / camZ, and scaled by the same amount.
- */
-function depthFactor(z, camZ) { return (camZ - z) / camZ; }
+// ------------------------------------------------------------------ conveyor
+// ⭐ THE REEF TRAVELS, THE GAMEPLAY DOES NOT.
+//
+// The camera never moves. Instead the reef streams toward it and recycles, which
+// gives "swimming forward over a reef" while leaving the play plane at z = 0
+// completely untouched - the bubbles and dice do not drift, do not change size,
+// and every capture radius and tap target stays exactly where it was. Moving the
+// real camera would have forced the whole play plane to chase it.
+//
+// Content lives in TRUE WORLD COORDINATES here, unlike the old static reef which
+// pre-compensated for perspective to pin things to the corners. That
+// compensation is exactly what we now want perspective to undo: a cluster should
+// grow and sink out of frame as it approaches.
+//
+// Geometry: a cluster sits at y = -22, which at the far end is low in frame and
+// by z ~ -27 has dropped below the bottom edge - so bands leave the shot on
+// their own and never need fading. Nothing ever reaches the play plane.
+const Z_BACK = -112;       // where a band is (re)spawned
+const Z_FRONT = -30;       // recycle once past this - still far behind z = 0
+const SPAN = Z_FRONT - Z_BACK;
+const BANDS = 4;
+const TRAVEL = 1.45;       // world units per second
+
+// ⛔ THE FLOOR IS LOW FOR A REASON. A cluster is ~15 world units tall, and the
+// visible half-height at these depths is only 23-50 units, so a sea bed at
+// y = -22 puts coral straight through the bubble row. At -40 the gardens sit in
+// the bottom third at the far end and slide out of the bottom of frame as they
+// approach, which is what "swimming over a reef" actually looks like.
+const FLOOR_Y = -40;
 
 /**
- * Build the reef. `bounds` is the visible half-extent of the play plane and
- * `camZ` is the camera's z, needed for the depth compensation above.
- * Returns the animated pieces so the main loop can sway them.
+ * Build the reef. `bounds` is the visible half-extent of the play plane.
+ * `camZ` is kept for the static horizon, which is still screen-placed.
  */
 export function createReef(scene, bounds, camZ = 26) {
-  // Place an object so it reads as sitting at play-plane (px, py) with the
-  // given apparent scale, despite being at depth z.
-  const place = (obj, px, py, z, apparentScale = 1) => {
-    const f = depthFactor(z, camZ);
-    obj.position.set(px * f, py * f, z);
-    obj.scale.multiplyScalar(apparentScale * f);
-    return obj;
-  };
   const group = new THREE.Group();
   scene.add(group);
   const swaying = [];
+  const bands = [];
 
-  // ⭐ THE REEF SCALES WITH THE VIEWPORT.
-  //
-  // Scenery sized in absolute world units does not survive an aspect change:
-  // bounds.x runs from about 5 on a portrait tablet to 23 on a classroom panel,
-  // so a sea fan that sits politely in the corner of a 16:9 screen sprawls
-  // across a phone and cuts straight through the bubble row. Everything in the
-  // clusters is multiplied by this.
-  const S = THREE.MathUtils.clamp(bounds.x / 22, 0.42, 1.15);
+  // How far out the clusters sit. Wide enough to frame the shot, pulled in on a
+  // narrow screen so a portrait tablet still sees reef rather than empty water.
+  const SIDE = Math.max(15, bounds.x * 1.15);
+  const FLOOR = FLOOR_Y;
 
-  // ---- background --------------------------------------------------------
-  // The distant reef sits just below the horizon of the bay, hazy and low in
-  // contrast. Two bands at different depths give the far water a sense of
-  // continuing rather than ending at a wall.
-  const reef = makeDistantReef(bounds.x * 3.4);
-  place(reef, 0, -bounds.y * 1.02, -78);
-  group.add(reef);
-
-  const reef2 = makeDistantReef(bounds.x * 2.8);
-  place(reef2, bounds.x * 0.35, -bounds.y * 1.12, -58);
-  reef2.material = reef2.material.clone();
-  reef2.material.color.setHex(0x0e3450);
-  reef2.material.opacity = 0.55;
-  group.add(reef2);
-
-  // ---- midground gardens -------------------------------------------------
-  // Two clusters, bottom-left and bottom-right, sized to read as substantial
-  // scenery rather than ornaments. The CENTRE IS LEFT EMPTY on purpose: that
-  // column holds the vowel bubble and the vowel bay, the two things a child
-  // looks at most.
-  const clusterAt = (px, cz, flip) => {
+  const buildCluster = (flip) => {
     const c = new THREE.Group();
 
     const rock = makeRock(2.9, PALETTE.rock);
@@ -459,16 +442,13 @@ export function createReef(scene, bounds, camZ = 26) {
     coralC.position.set(flip * 0.3, 1.0, 2.1);
     c.add(coralC);
 
-    // ONE fan per cluster, and a big one. Two small fans read as clutter; a
-    // single large one is a silhouette you can actually recognise. It is also
-    // turned nearly face-on to camera, because a fan seen edge-on is a stick.
-    const fan = makeFan(2.9, PALETTE.coralDeep);
+    const fan = makeFan(1.7, PALETTE.coralDeep);
     fan.position.set(flip * 3.2, 1.2, -1.0);
     fan.rotation.y = flip * 0.22;
     c.add(fan);
     swaying.push(fan);
 
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 2; i++) {
       const an = makeAnemone(1.1 + Math.random() * 0.5, PALETTE.coralDeep);
       an.position.set(flip * (-2.2 + Math.random() * 5.5), 0.7 + Math.random() * 0.6,
                       1.2 + Math.random() * 2);
@@ -476,92 +456,77 @@ export function createReef(scene, bounds, camZ = 26) {
       swaying.push(an);
     }
 
-    // Kelp is the tallest thing in the cluster and links the floor to the open
-    // water. Kept to the outer side so it never rises into the bubble row.
-    // ⛔ Kelp grows OUTWARD only (away from centre) and is kept short enough
-    // that it never rises into the bubble row. Tall strands through the middle
-    // of the frame cut across the bubbles and the vowel column, which is the
-    // one place the composition has to stay clean.
-    for (let i = 0; i < 5; i++) {
-      const k = makeKelp(5 + Math.random() * 3.5, 0.58, i % 2 ? PALETTE.kelpLight : PALETTE.kelpDark);
+    for (let i = 0; i < 3; i++) {
+      const k = makeKelp(4 + Math.random() * 2.5, 0.58,
+                         i % 2 ? PALETTE.kelpLight : PALETTE.kelpDark);
       k.position.set(flip * (2.5 + Math.random() * 7), 0.3, -1.5 - Math.random() * 3);
       c.add(k);
       swaying.push(k);
     }
-
-    c.scale.multiplyScalar(S);
-    place(c, px, -bounds.y * 1.0, cz);
-    group.add(c);
+    return c;
   };
 
-  clusterAt(-bounds.x * 0.74, -30, -1);
-  clusterAt(bounds.x * 0.78, -34, 1);
-
-  // A third, smaller and further cluster to break the symmetry of the two
-  // main gardens. Sits low and behind.
-  // Rocks only - no kelp. An earlier version put tall strands here and they
-  // rose straight through the middle bubble and the vowel bay column.
-  const far = new THREE.Group();
-  far.add(makeRock(2.4, PALETTE.rockDeep));
-  const far2 = makeRock(1.5, PALETTE.rockDeep);
-  far2.position.set(3.4, -0.4, -1);
-  far.add(far2);
-  far.scale.multiplyScalar(S);
-  place(far, -bounds.x * 0.30, -bounds.y * 1.08, -48);
-  group.add(far);
-
-  // ---- foreground --------------------------------------------------------
-  // Dark, soft silhouettes hugging the very bottom edge. These frame the shot.
-  // ⛔ They are a BLUE-BLACK, not black: pure black punched holes in the water
-  // and read as missing geometry rather than as something in front of it.
-  const fgMat = mat(0x0a2740, { rough: 1.0, flat: true });
-  for (const [px, s2, z] of [[-bounds.x * 0.92, 4.6, -15], [bounds.x * 0.88, 4.0, -16],
-                             [-bounds.x * 0.22, 3.2, -14], [bounds.x * 0.40, 2.8, -17]]) {
-    const r = makeRock(s2, 0x0a2740);
-    r.material = fgMat;
-    place(r, px, -bounds.y * 1.22, z);
-    group.add(r);
-  }
-
-  // ---- floor scatter -----------------------------------------------------
-  // Low, small, and spread across the whole floor including the centre. These
-  // are the only centre-field objects in the file and they are deliberately
-  // flat to the ground: nothing here rises toward the bubble row.
+  // ---- the travelling bands ---------------------------------------------
   const stoneMat = mat(0x1c4360, { rough: 0.95, flat: true });
-  const pearlMat = mat(PALETTE.pearl, { rough: 0.18, metal: 0.1 });
   const shellMat = mat(0xffd9c2, { rough: 0.6 });
-  for (let i = 0; i < 16; i++) {
-    const px = (Math.random() - 0.5) * bounds.x * 1.9;
-    const z = -22 - Math.random() * 16;
-    const kind = Math.random();
-    let o;
-    if (kind < 0.62) {
-      o = makeRock(0.5 + Math.random() * 0.75, 0x1c4360);
-      o.material = stoneMat;
-    } else if (kind < 0.9) {
-      // A shell: a squashed half-sphere with a little twist.
-      o = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 7, 0, Math.PI * 1.5), shellMat);
-      o.scale.set(1, 0.6, 1);
-      o.rotation.set(0.3, Math.random() * 6.28, 0.2);
-    } else {
-      o = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 10), pearlMat);
+  const pearlMat = mat(PALETTE.pearl, { rough: 0.18, metal: 0.1 });
+
+  for (let i = 0; i < BANDS; i++) {
+    const band = new THREE.Group();
+
+    for (const flip of [-1, 1]) {
+      const c = buildCluster(flip);
+      c.scale.setScalar(2.2 + Math.random() * 0.6);
+      c.position.set(flip * SIDE * (0.86 + Math.random() * 0.3),
+                     FLOOR, (Math.random() - 0.5) * 10);
+      band.add(c);
     }
-    place(o, px, -bounds.y * (1.02 + Math.random() * 0.1), z);
-    group.add(o);
+
+    // Floor litter between the gardens, so the sea bed reads as continuous
+    // rather than as two islands sliding past.
+    for (let j = 0; j < 7; j++) {
+      const kind = Math.random();
+      let o;
+      if (kind < 0.62) { o = makeRock(1.4 + Math.random() * 2.4, 0x1c4360); o.material = stoneMat; }
+      else if (kind < 0.9) {
+        o = new THREE.Mesh(new THREE.SphereGeometry(1.1, 10, 7, 0, Math.PI * 1.5), shellMat);
+        o.scale.set(1, 0.6, 1);
+        o.rotation.set(0.3, Math.random() * 6.28, 0.2);
+      } else { o = new THREE.Mesh(new THREE.SphereGeometry(0.7, 12, 10), pearlMat); }
+      o.position.set((Math.random() - 0.5) * SIDE * 2.6,
+                     FLOOR + (Math.random() - 0.5) * 3,
+                     (Math.random() - 0.5) * 12);
+      band.add(o);
+    }
+
+    // ⛔ Merge each band INTERNALLY only. Merging across bands would weld them
+    // into one mesh and they could no longer travel independently.
+    for (const o of swaying) o.traverse(c => { c.userData.keepSeparate = true; });
+    mergeInto(band);
+
+    band.position.z = Z_BACK + (i * SPAN) / BANDS;
+    group.add(band);
+    bands.push(band);
   }
 
-  // ---- bake the static scenery ------------------------------------------
-  // Everything that sways has to stay its own object; everything else - rocks,
-  // shells, pearls, the foreground silhouettes, both distant reef bands - is
-  // static and can collapse into a handful of merged meshes.
-  for (const o of swaying) o.traverse(c => { c.userData.keepSeparate = true; });
-  // The distant reef bands use MeshBasicMaterial with their own opacity, so
-  // leave them alone rather than risk merging them into the lit materials.
-  reef.userData.keepSeparate = true;
-  reef2.userData.keepSeparate = true;
-  mergeInto(group);
+  // ---- static horizon ----------------------------------------------------
+  // The far reef barely moves - that IS correct parallax, and it also gives the
+  // eye something stable to read the travelling bands against.
+  const horizon = new THREE.Group();
+  const reefA = makeDistantReef(bounds.x * 3.4);
+  reefA.position.set(0, -bounds.y * 1.02 * ((camZ + 78) / camZ), -78);
+  reefA.scale.multiplyScalar((camZ + 78) / camZ);
+  horizon.add(reefA);
+  const reefB = makeDistantReef(bounds.x * 2.8);
+  reefB.material = reefB.material.clone();
+  reefB.material.color.setHex(0x0e3450);
+  reefB.material.opacity = 0.55;
+  reefB.position.set(bounds.x * 0.35 * ((camZ + 58) / camZ),
+                     -bounds.y * 1.12 * ((camZ + 58) / camZ), -58);
+  reefB.scale.multiplyScalar((camZ + 58) / camZ);
+  horizon.add(reefB);
+  group.add(horizon);
 
-  /** Release every geometry and material this reef owns. */
   function dispose() {
     group.traverse(o => {
       if (!o.isMesh) return;
@@ -571,14 +536,26 @@ export function createReef(scene, bounds, camZ = 26) {
     });
     scene.remove(group);
     swaying.length = 0;
+    bands.length = 0;
   }
 
-  return { group, swaying, dispose };
+  return { group, swaying, bands, dispose };
 }
 
-/** Currents. Everything sways on the same slow field so the water feels shared. */
-export function updateReef(reef, t, reducedMotion = false) {
+/**
+ * Currents, plus the forward travel. Everything sways on the same slow field so
+ * the water feels shared.
+ */
+export function updateReef(reef, t, reducedMotion = false, dt = 0) {
   const amp = reducedMotion ? 0.3 : 1;
+
+  // Advance the conveyor. Reduced motion slows it right down rather than
+  // stopping it - a frozen reef under a drifting camera looks broken.
+  const speed = TRAVEL * (reducedMotion ? 0.25 : 1);
+  for (const band of reef.bands || []) {
+    band.position.z += speed * dt;
+    if (band.position.z > Z_FRONT) band.position.z -= SPAN;
+  }
   for (const o of reef.swaying) {
     const u = o.userData;
     if (u.kind === 'kelp') {
