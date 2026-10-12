@@ -156,6 +156,36 @@ The mesh is a unit sphere scaled by `b.r`. Radius is recomputed from the viewpor
 on every resize, and a baked geometry cannot follow it — that shipped a portrait
 layout where the bubbles kept their landscape size and overlapped into a tangle.
 
+### ⛔ A sea fan is a LATTICE, and its stems must be hair-thin
+
+Two failed versions are worth knowing about, because both arrived at the same
+yellow starburst from different directions:
+
+1. An extruded `Shape` with alternating radii — a solid outline can never read
+   as a gorgonian.
+2. A branching lattice with stems at `rad 0.075` — as wide as they were long, so
+   the gaps closed up and it became solid spikes again.
+
+What works: `growFanBranch` at `rad 0.034`, six generations, splay narrowing each
+generation, confined to the XY plane (no yaw at all) and squashed on Z. You have
+to be able to see water through it.
+
+The lattice is **merged at build time**. The fan is in the `swaying` list, which
+marks its children `keepSeparate` and skips them in the scene merge — several
+hundred unmerged cylinders took the board from 124 draw calls to 289. The sway
+rotates the fan as a whole, so nothing inside needs to move on its own.
+
+### ⭐ The reef scales with the viewport, and rebuilds on resize
+
+`S = clamp(bounds.x / 22, 0.42, 1.15)` in `createReef`. Scenery sized in absolute
+world units does not survive an aspect change: `bounds.x` runs from ~5 on a
+portrait tablet to ~23 on a classroom panel, so a fan that sits politely in the
+corner of a 16:9 screen sprawls across a phone and cuts through the bubble row.
+
+Because `S` is baked at build time, a resize **disposes and rebuilds** the reef,
+debounced by 320ms — a drag-resize fires continuously and rebuilding a few
+hundred merged geometries per frame would lock the tab.
+
 ### ⭐ Bubbles track the bay columns
 
 Bubble x positions are the bay column centres pulled 52% toward the middle

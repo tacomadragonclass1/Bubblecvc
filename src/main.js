@@ -42,6 +42,7 @@ let lastSpoken = '';           // guards against re-speaking the same state
 // be watched frame by frame - the timing in pop.js was tuned this way.
 let timeScale = 1;
 let bubbleY = 0;
+let reefRebuildTimer = null;
 
 const SLOTS = 3;
 
@@ -128,6 +129,16 @@ function resize() {
   // A live session has to re-lay its furniture, or a rotated tablet drops the
   // bay off the bottom of the screen.
   if (running && board) relayout();
+
+  // The reef is sized relative to the viewport, so an aspect change has to
+  // rebuild it. Debounced: a drag-resize fires this continuously, and rebuilding
+  // a few hundred merged geometries per frame would lock the tab.
+  clearTimeout(reefRebuildTimer);
+  reefRebuildTimer = setTimeout(() => {
+    if (!reef) return;
+    reef.dispose();
+    reef = createReef(scene, bounds, CAM_Z);
+  }, 320);
 }
 
 // ----------------------------------------------------------------- session

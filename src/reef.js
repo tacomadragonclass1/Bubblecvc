@@ -96,7 +96,7 @@ const PALETTE = {
   coralPink:  0xff7a92,
   coralDeep:  0xe0556f,
   amber:      0xffa94f,
-  gold:       0xffd27a,
+  gold:       0xffd27a,   // used by the floor scatter, not the fans
   lavender:   0xb9a3e8,
   kelpDark:   0x1d6b63,
   kelpLight:  0x3fa88b,
@@ -197,10 +197,21 @@ function makeKelp(height, width, color) {
 // as coral; more just costs draw calls.
 function growBranch(parent, len, rad, depth, material) {
   if (depth <= 0) return;
-  const geo = new THREE.CylinderGeometry(rad * 0.62, rad, len, 6, 1);
+  // 8 sides and smooth shading. At 6 sides with flatShading the branches read
+  // as faceted sticks rather than as something that grew.
+  const geo = new THREE.CylinderGeometry(rad * 0.62, rad, len, 8, 1);
   geo.translate(0, len / 2, 0);
   const seg = new THREE.Mesh(geo, material);
   parent.add(seg);
+
+  // Rounded tip. Real branching coral is blunt and swollen at the ends, never
+  // cut off flat - this one detail does most of the work.
+  if (depth === 1) {
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(rad * 0.72, 8, 6), material);
+    tip.position.y = len;
+    tip.scale.set(1, 1.25, 1);
+    seg.add(tip);
+  }
 
   const n = depth > 2 ? 3 : 2;
   for (let i = 0; i < n; i++) {
@@ -215,7 +226,7 @@ function growBranch(parent, len, rad, depth, material) {
 
 function makeCoral(scale, color) {
   const g = new THREE.Group();
-  growBranch(g, 1.5, 0.22, 4, mat(color, { rough: 0.78, flat: true }));
+  growBranch(g, 1.5, 0.22, 4, mat(color, { rough: 0.74, flat: false }));
   // A coral is ~40 cylinders and none of them move independently, so it becomes
   // one mesh the moment it is built.
   mergeInto(g);
@@ -224,27 +235,64 @@ function makeCoral(scale, color) {
 }
 
 // --------------------------------------------------------------- sea fan
-// A flat fan, the most distinctive coral silhouette and very cheap: one
-// lathe-ish shape with holes implied by its outline rather than modelled.
-function makeFan(scale, color) {
-  const shape = new THREE.Shape();
-  shape.moveTo(0, 0);
-  const lobes = 7;
-  for (let i = 0; i <= lobes; i++) {
-    const a = Math.PI * (0.12 + 0.76 * (i / lobes));
-    const r = 1.0 + Math.sin(i * 2.1) * 0.22;
-    shape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-    const a2 = a + Math.PI * 0.76 / lobes * 0.5;
-    shape.lineTo(Math.cos(a2) * r * 0.62, Math.sin(a2) * r * 0.62);
+// ⛔ A SEA FAN IS A LATTICE, NOT A SOLID SHAPE.
+//
+// The first version was a Shape with alternating radii, extruded - which came
+// out as a yellow starburst, the single worst-looking object in the scene. A
+// gorgonian's whole visual identity is a FLAT BRANCHING NET: stems that split
+// repeatedly, fan out within one plane, and stay thin enough to see water
+// through. Solid geometry can never read as one.
+//
+// So it is grown like the coral, but with two constraints that make it a fan
+// rather than a bush: branching is confined to the XY plane (no yaw at all),
+// and the split angle narrows with each generation so the tips end up roughly
+// parallel instead of splaying.
+function growFanBranch(parent, len, rad, depth, spread, material) {
+  if (depth <= 0) return;
+  const geo = new THREE.CylinderGeometry(rad * 0.68, rad, len, 5, 1);
+  geo.translate(0, len / 2, 0);
+  const seg = new THREE.Mesh(geo, material);
+  parent.add(seg);
+
+  // Two children most of the time, occasionally three - a perfectly binary tree
+  // looks manufactured.
+  const n = Math.random() < 0.22 ? 3 : 2;
+  for (let i = 0; i < n; i++) {
+    const child = new THREE.Group();
+    child.position.y = len * (0.70 + Math.random() * 0.26);
+    // Fan out in the plane only. The small random term keeps it from being
+    // mirror-symmetric, which also reads as manufactured.
+    const t = n === 1 ? 0 : (i / (n - 1)) * 2 - 1;
+    child.rotation.z = t * spread + (Math.random() - 0.5) * 0.12;
+    seg.add(child);
+    growFanBranch(child, len * (0.70 + Math.random() * 0.12), rad * 0.72,
+                  depth - 1, spread * 0.68, material);
   }
-  shape.lineTo(0, 0);
-  const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.06, bevelEnabled: false });
-  const m = mat(color, { rough: 0.8 });
-  m.side = THREE.DoubleSide;
-  const mesh = new THREE.Mesh(geo, m);
-  mesh.scale.setScalar(scale);
+}
+
+function makeFan(scale, color) {
   const g = new THREE.Group();
-  g.add(mesh);
+  const inner = new THREE.Group();
+  // Smooth shading: a sea fan has round stems, and flatShading on a 5-sided
+  // cylinder makes them read as faceted sticks.
+  // ⛔ STEM THICKNESS IS THE WHOLE THING. At rad 0.075 the branches were as wide
+  // as they were long and the lattice closed up into solid spikes - the same
+  // starburst failure as the extruded version, just arrived at differently. A
+  // gorgonian's stems are hair-thin relative to the fan; you have to be able to
+  // see water through it.
+  const m = mat(color, { rough: 0.72, flat: false });
+  growFanBranch(inner, 1.15, 0.034, 6, 0.46, m);
+  // ⭐ BAKE THE LATTICE. Six generations of 2-3 branches is several hundred
+  // cylinders, and because the fan is in the `swaying` list every one of them
+  // was being marked keepSeparate and skipped by the scene merge - which took
+  // the board from 124 draw calls to 289. The sway rotates the fan as a whole,
+  // so nothing inside it needs to move independently.
+  mergeInto(inner);
+  // Fans grow across the current, so they are wide and very thin. Squashing on
+  // Z after the fact keeps the branching maths simple.
+  inner.scale.set(1, 1, 0.22);
+  g.add(inner);
+  g.scale.setScalar(scale);
   g.userData.kind = 'fan';
   g.userData.phase = Math.random() * Math.PI * 2;
   return g;
@@ -363,6 +411,15 @@ export function createReef(scene, bounds, camZ = 26) {
   scene.add(group);
   const swaying = [];
 
+  // ⭐ THE REEF SCALES WITH THE VIEWPORT.
+  //
+  // Scenery sized in absolute world units does not survive an aspect change:
+  // bounds.x runs from about 5 on a portrait tablet to 23 on a classroom panel,
+  // so a sea fan that sits politely in the corner of a 16:9 screen sprawls
+  // across a phone and cuts straight through the bubble row. Everything in the
+  // clusters is multiplied by this.
+  const S = THREE.MathUtils.clamp(bounds.x / 22, 0.42, 1.15);
+
   // ---- background --------------------------------------------------------
   // The distant reef sits just below the horizon of the bay, hazy and low in
   // contrast. Two bands at different depths give the far water a sense of
@@ -402,17 +459,14 @@ export function createReef(scene, bounds, camZ = 26) {
     coralC.position.set(flip * 0.3, 1.0, 2.1);
     c.add(coralC);
 
-    const fan = makeFan(2.8, PALETTE.coralDeep);
-    fan.position.set(flip * 3.4, 1.3, -1.3);
-    fan.rotation.y = flip * 0.4;
+    // ONE fan per cluster, and a big one. Two small fans read as clutter; a
+    // single large one is a silhouette you can actually recognise. It is also
+    // turned nearly face-on to camera, because a fan seen edge-on is a stick.
+    const fan = makeFan(2.9, PALETTE.coralDeep);
+    fan.position.set(flip * 3.2, 1.2, -1.0);
+    fan.rotation.y = flip * 0.22;
     c.add(fan);
     swaying.push(fan);
-
-    const fan2 = makeFan(1.9, PALETTE.gold);
-    fan2.position.set(flip * -3.3, 1.0, 0.4);
-    fan2.rotation.y = -flip * 0.6;
-    c.add(fan2);
-    swaying.push(fan2);
 
     for (let i = 0; i < 3; i++) {
       const an = makeAnemone(1.1 + Math.random() * 0.5, PALETTE.coralDeep);
@@ -435,6 +489,7 @@ export function createReef(scene, bounds, camZ = 26) {
       swaying.push(k);
     }
 
+    c.scale.multiplyScalar(S);
     place(c, px, -bounds.y * 1.0, cz);
     group.add(c);
   };
@@ -451,6 +506,7 @@ export function createReef(scene, bounds, camZ = 26) {
   const far2 = makeRock(1.5, PALETTE.rockDeep);
   far2.position.set(3.4, -0.4, -1);
   far.add(far2);
+  far.scale.multiplyScalar(S);
   place(far, -bounds.x * 0.30, -bounds.y * 1.08, -48);
   group.add(far);
 
@@ -505,7 +561,19 @@ export function createReef(scene, bounds, camZ = 26) {
   reef2.userData.keepSeparate = true;
   mergeInto(group);
 
-  return { group, swaying };
+  /** Release every geometry and material this reef owns. */
+  function dispose() {
+    group.traverse(o => {
+      if (!o.isMesh) return;
+      o.geometry.dispose();
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) m && m.dispose && m.dispose();
+    });
+    scene.remove(group);
+    swaying.length = 0;
+  }
+
+  return { group, swaying, dispose };
 }
 
 /** Currents. Everything sways on the same slow field so the water feels shared. */
@@ -518,8 +586,9 @@ export function updateReef(reef, t, reducedMotion = false) {
       // vertex shader.
       u.mat.uniforms.uTime.value = reducedMotion ? t * 0.3 : t;
     } else if (u.kind === 'fan') {
-      o.rotation.z = Math.sin(t * 0.55 + u.phase) * 0.09 * amp;
-      o.children[0].rotation.y = Math.sin(t * 0.4 + u.phase) * 0.18 * amp;
+      // A fan is stiff - it pivots at the holdfast rather than rippling.
+      o.rotation.z = Math.sin(t * 0.5 + u.phase) * 0.075 * amp;
+      o.rotation.y = Math.sin(t * 0.34 + u.phase * 1.3) * 0.14 * amp;
     } else if (u.kind === 'anemone' && u.crown) {
       u.crown.rotation.x = Math.sin(t * 1.25 + u.phase) * 0.17 * amp;
       u.crown.rotation.z = Math.cos(t * 1.05 + u.phase) * 0.15 * amp;
