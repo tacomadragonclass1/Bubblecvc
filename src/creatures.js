@@ -18,6 +18,7 @@
 
 import * as THREE from '../vendor/three.module.js';
 import { GLTFLoader } from '../vendor/jsm/GLTFLoader.js';
+import { makeUnderwater } from './lightwater.js';
 
 const MANIFEST = 'assets/creatures/manifest.json';
 
@@ -89,6 +90,16 @@ export async function loadCreatures(renderer) {
           // fish up to 8 unscaled units away from its lane and made them look
           // like they had vanished. The offset has to be scaled by the same
           // factor, which can only happen once the spawn scale is known.
+          // Caustics on the fish as well. A fish lit like it is in air while
+          // the rock beside it is dappled is the most obvious possible tell.
+          // Less fog than the reef - a creature should stay readable against
+          // the water rather than dissolving into it.
+          root.traverse(o => {
+            if (!o.isMesh) return;
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            for (const m of mats) makeUnderwater(m, { caustics: 0.5, fog: 0.5 });
+          });
+
           const centre = new THREE.Vector3();
           box.getCenter(centre);
 

@@ -286,6 +286,52 @@ and `ot` as sounds rather than letter names, and whether nonsense words like
 
 ---
 
+## Underwater light (`src/lightwater.js`)
+
+An art-direction audit found the core problem in one sentence: **the scene was
+underwater *behind* the objects and dry *on* them.** The water shader painted
+caustics, god rays and a depth ramp — and then every rock, coral and fish was lit
+by a plain directional light as if standing in a field. Nothing in the whole
+project used `castShadow`, `receiveShadow`, `aoMap`, `vertexColors` or
+`onBeforeCompile`.
+
+Three fixes, all injected into the standard material rather than added as a post
+pass, because a post pass costs a full-screen read and this costs a few
+instructions on surfaces already being shaded. **Draw calls did not change.**
+
+**Caustics**, projected from above in world space, so the pattern is fixed to the
+world and the reef slides through it. Only on upward-facing surfaces, strongest
+at the sea bed.
+
+⛔ **Spatial frequency is the entire effect.** At `0.085` the noise cell is ~12
+world units while a rock is ~6 — every rock sat inside half a cell and received
+one near-constant value. The caustics were mathematically present and completely
+invisible. The pattern must be **finer than the objects it falls on** (now `0.34`).
+
+**Baked vertex-colour AO**, darkening toward the sea bed with noise mottling.
+Nothing was anchored before: a coral stem simply intersected a rock with no
+darkening at the join, so everything read as objects *placed near* each other
+rather than growing out of each other. Baked once at build time, free per frame.
+
+**Tinted depth falloff.** ⛔ The fog colour **must be darker than the water it
+blends into.** The first value was a mid-blue brighter than the vignetted water
+at the sea bed, so the distant reef receded toward a *glow* — the coral came out
+pale and ghostly, lighter than its background, which is the exact inverse of
+atmospheric perspective.
+
+Also ⛔ keep the sediment tint **dim and cool**. A bright warm sand colour at any
+real strength bleaches coral to pale pink and the garden looks sun-faded; silt
+underwater is muted blue-grey, not beach sand in daylight.
+
+### Rocks
+
+Rebuilt — the audit called them the weakest asset *and* the largest mass, which
+is the worst combination. The old version was a once-subdivided icosahedron with
+uniform jitter in one flat blue and read as crumpled paper. Now: two scales of
+displacement (big lobes for mass, small chips for surface), a **flat base** so
+they bed into the floor instead of hovering, and all value coming from the baked
+vertex colours rather than the material.
+
 ## Performance
 
 Measured from `renderer.info`, not estimated:

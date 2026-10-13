@@ -24,6 +24,7 @@ import * as A from './audio.js';
 import { createPrescreen } from './prescreen.js';
 import { createPopFX } from './pop.js';
 import { loadCreatures } from './creatures.js';
+import { updateWater } from './lightwater.js';
 
 const FOV = 45;
 const CAM_Z = 26;
@@ -376,6 +377,7 @@ function frame() {
   const t = clock.elapsed;
 
   water.material.uniforms.uTime.value = t;
+  updateWater(t);
   updateOcean(ocean, bounds, t, dt);
   updateReef(reef, t, reducedMotion, dt);
   if (popFX) popFX.update(dt);

@@ -24,6 +24,7 @@
 // highlights to mean anything.
 
 import * as THREE from '../vendor/three.module.js';
+import { makeUnderwater, bakeReefShading, waterUniforms } from './lightwater.js';
 
 // ---------------------------------------------------------------- geometry merge
 // three.js keeps BufferGeometryUtils in examples/, which this project does not
@@ -333,17 +334,41 @@ function makeAnemone(scale, color) {
 }
 
 // ------------------------------------------------------------------- rocks
-function makeRock(scale, color) {
-  const geo = new THREE.IcosahedronGeometry(1, 1);
+// ⭐ THE AUDIT CALLED THESE THE WEAKEST ASSET AND THE LARGEST MASS, which is the
+// worst combination to get wrong. The old version was a once-subdivided
+// icosahedron with uniform random jitter in a single flat blue - it read as
+// crumpled paper, and because every rock was the same value as every other rock
+// the gardens had no internal structure at all.
+//
+// Three changes, all cheap:
+//   * TWO SCALES of displacement. Big lobes give a boulder its mass; small chips
+//     give it surface. One scale of noise gives neither, just mush.
+//   * A FLAT BASE. Rocks sit on the sea bed instead of hovering as full blobs,
+//     which also doubles the apparent size of the garden for free.
+//   * Value comes from bakeReefShading (vertex colours), not from the material.
+function makeRock(scale, color, seed = Math.random() * 100) {
+  const geo = new THREE.IcosahedronGeometry(1, 2);
   const pos = geo.attributes.position;
   const v = new THREE.Vector3();
+
+  const noise = (a, b, c) =>
+    Math.sin(a * 1.7 + seed) * Math.sin(b * 2.3 - seed) * Math.sin(c * 1.1 + seed * 0.5);
+
   for (let i = 0; i < pos.count; i++) {
     v.fromBufferAttribute(pos, i);
-    v.multiplyScalar(0.78 + Math.random() * 0.42);
-    pos.setXYZ(i, v.x, v.y * 0.68, v.z);
+    const n1 = noise(v.x * 1.4, v.y * 1.4, v.z * 1.4);   // boulder lobes
+    const n2 = noise(v.x * 5.2, v.y * 5.2, v.z * 5.2);   // surface chips
+    v.multiplyScalar(0.82 + n1 * 0.30 + n2 * 0.09);
+
+    // Squash vertically, then clamp the underside flat so it beds in.
+    v.y *= 0.62;
+    if (v.y < -0.30) v.y = -0.30 - (v.y + 0.30) * 0.12;
+
+    pos.setXYZ(i, v.x, v.y, v.z);
   }
   geo.computeVertexNormals();
-  const m = new THREE.Mesh(geo, mat(color, { rough: 0.95, flat: true }));
+
+  const m = new THREE.Mesh(geo, mat(color, { rough: 0.96, flat: true }));
   m.scale.setScalar(scale);
   return m;
 }
@@ -422,6 +447,7 @@ export function createReef(scene, bounds, camZ = 26) {
   // narrow screen so a portrait tablet still sees reef rather than empty water.
   const SIDE = Math.max(15, bounds.x * 1.15);
   const FLOOR = FLOOR_Y;
+  waterUniforms.uFloorY.value = FLOOR_Y;
 
   const buildCluster = (flip) => {
     const c = new THREE.Group();
@@ -504,9 +530,31 @@ export function createReef(scene, bounds, camZ = 26) {
     for (const o of swaying) o.traverse(c => { c.userData.keepSeparate = true; });
     mergeInto(band);
 
+    // Bake the anchoring shading, then make every surface underwater-lit. Order
+    // matters: bakeReefShading clones the material, so caustics must be applied
+    // to the clone, not to the original it replaced.
+    band.traverse(o => {
+      if (!o.isMesh) return;
+      bakeReefShading(o, { floorY: FLOOR_Y, spread: 18 });
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) makeUnderwater(m, { caustics: 1.0, fog: 1.0 });
+    });
+
     band.position.z = Z_BACK + (i * SPAN) / BANDS;
     group.add(band);
     bands.push(band);
+  }
+
+  // The swaying pieces are deliberately excluded from the merge, so they never
+  // got the treatment above. Light them too, or the kelp and fans are the only
+  // dry-looking things in the water.
+  for (const o of swaying) {
+    o.traverse(c => {
+      if (!c.isMesh) return;
+      const mats = Array.isArray(c.material) ? c.material : [c.material];
+      // Kelp runs its own bespoke shader, so it is left alone here.
+      for (const m of mats) if (m.isMeshStandardMaterial) makeUnderwater(m, { caustics: 0.75, fog: 1.0 });
+    });
   }
 
   // ---- static horizon ----------------------------------------------------
