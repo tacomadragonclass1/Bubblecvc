@@ -93,9 +93,18 @@ function mergeGeometries(list) {
   return out;
 }
 
+// ⭐ COLOUR IS RATIONED. The old palette was three near-identical hot pinks and
+// the gardens had no focal point - everything shouted at the same volume. Now
+// exactly ONE saturated accent (coralPink, on the branching coral) sits among
+// muted ochre, mauve and olive. Deep sapphire has to dominate for the warm
+// notes to mean anything.
 const PALETTE = {
-  coralPink:  0xff7a92,
-  coralDeep:  0xe0556f,
+  coralPink:  0xff7a92,   // THE accent - branching coral only
+  coralDeep:  0xcf5f74,   // sea fan, a half-step down
+  brain:      0xc98f7a,   // muted terracotta
+  table:      0xb8a06a,   // dull ochre
+  pipes:      0x9f8fb8,   // dusty mauve
+  anemoneBase:0xd4737f,
   amber:      0xffa94f,
   gold:       0xffd27a,   // used by the floor scatter, not the fans
   lavender:   0xb9a3e8,
@@ -133,6 +142,7 @@ const kelpVert = /* glsl */`
   uniform float uAmp;
   varying vec2 vUv;
   varying float vShade;
+  varying vec3 vNormalW;
   void main() {
     vUv = uv;
     vec3 p = position;
@@ -145,6 +155,7 @@ const kelpVert = /* glsl */`
     p.z += twist;
     // A little self-shading toward the tip so the strand is not flat.
     vShade = 0.72 + 0.28 * h;
+    vNormalW = normalize(mat3(modelMatrix) * normal);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }
 `;
@@ -152,13 +163,28 @@ const kelpVert = /* glsl */`
 const kelpFrag = /* glsl */`
   precision mediump float;
   uniform vec3 uColor;
+  uniform vec3 uLightDir;
   varying vec2 vUv;
   varying float vShade;
+  varying vec3 vNormalW;
   void main() {
     // A paler spine down the middle of the blade reads as a leaf vein and keeps
     // the ribbon from looking like a flat rectangle.
     float spine = 1.0 - smoothstep(0.0, 0.35, abs(vUv.x - 0.5));
     vec3 c = uColor * vShade * (1.0 + spine * 0.22);
+
+    // ⭐ FAKE TRANSLUCENCY. Kelp is a thin membrane and GLOWS when light comes
+    // through it from behind - that single property is most of what makes it
+    // read as a living plant rather than a cut-out ribbon. Blades facing away
+    // from the key light get warmed and lifted rather than darkened, which is
+    // the opposite of what ordinary shading does and exactly what a leaf does.
+    float back = 1.0 - abs(dot(normalize(vNormalW), normalize(uLightDir)));
+    float glow = pow(clamp(back, 0.0, 1.0), 2.2);
+    c += vec3(0.30, 0.62, 0.38) * glow * 0.55;
+
+    // Thinner, brighter toward the tip where the blade is youngest.
+    c += uColor * pow(vUv.y, 3.0) * 0.35;
+
     gl_FragColor = vec4(c, 1.0);
   }
 `;
@@ -183,6 +209,8 @@ function makeKelp(height, width, color) {
       uHeight: { value: height },
       uAmp: { value: 0.5 + Math.random() * 0.4 },
       uColor: { value: new THREE.Color(color) },
+      // Matches the key light in ocean.js, so the backlight agrees with the sun.
+      uLightDir: { value: new THREE.Vector3(-0.35, 1.0, 0.62).normalize() },
     },
     side: THREE.DoubleSide,
   });
@@ -235,63 +263,172 @@ function makeCoral(scale, color) {
   return g;
 }
 
-// --------------------------------------------------------------- sea fan
-// ⛔ A SEA FAN IS A LATTICE, NOT A SOLID SHAPE.
+// ------------------------------------------------------- coral morphologies
+// ⭐ THE AUDIT'S SECOND FINDING: every coral in the reef was the SAME branching
+// algorithm recoloured three times. Pink, amber and lavender shared one
+// silhouette, so the gardens read as repetitive no matter how many were added.
 //
-// The first version was a Shape with alternating radii, extruded - which came
-// out as a yellow starburst, the single worst-looking object in the scene. A
-// gorgonian's whole visual identity is a FLAT BRANCHING NET: stems that split
-// repeatedly, fan out within one plane, and stay thin enough to see water
-// through. Solid geometry can never read as one.
+// A real reef is defined by CONTRASTING FORMS, and the contrast is structural,
+// not chromatic. These four give the garden four different shapes to read:
 //
-// So it is grown like the coral, but with two constraints that make it a fan
-// rather than a bush: branching is confined to the XY plane (no yaw at all),
-// and the split angle narrows with each generation so the tips end up roughly
-// parallel instead of splaying.
-function growFanBranch(parent, len, rad, depth, spread, material) {
-  if (depth <= 0) return;
-  const geo = new THREE.CylinderGeometry(rad * 0.68, rad, len, 5, 1);
-  geo.translate(0, len / 2, 0);
-  const seg = new THREE.Mesh(geo, material);
-  parent.add(seg);
+//   brain/dome   a solid rounded MASS      - what the gardens had none of
+//   table/plate  a flat HORIZONTAL disc    - the strongest horizontal on a reef
+//   pipes        a vertical RHYTHM         - repetition at a small scale
+//   branching    the existing fractal      - now one voice among four
+//
+// Hot pink is also rationed from here on: the branching coral keeps it as the
+// accent, and the new forms take muted ochre, mauve and olive. A garden where
+// everything shouts at the same volume has no focal point.
 
-  // Two children most of the time, occasionally three - a perfectly binary tree
-  // looks manufactured.
-  const n = Math.random() < 0.22 ? 3 : 2;
-  for (let i = 0; i < n; i++) {
-    const child = new THREE.Group();
-    child.position.y = len * (0.70 + Math.random() * 0.26);
-    // Fan out in the plane only. The small random term keeps it from being
-    // mirror-symmetric, which also reads as manufactured.
-    const t = n === 1 ? 0 : (i / (n - 1)) * 2 - 1;
-    child.rotation.z = t * spread + (Math.random() - 0.5) * 0.12;
-    seg.add(child);
-    growFanBranch(child, len * (0.70 + Math.random() * 0.12), rad * 0.72,
-                  depth - 1, spread * 0.68, material);
+/** Brain coral: a squat dome carved by meandering grooves. */
+function makeBrainCoral(scale, color) {
+  const geo = new THREE.SphereGeometry(1, 40, 28, 0, Math.PI * 2, 0, Math.PI * 0.62);
+  const pos = geo.attributes.position;
+  const v = new THREE.Vector3();
+  const seed = Math.random() * 10;
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    // Two interfering sine fields across the surface give the characteristic
+    // meander. A single field just gives stripes.
+    const g = Math.sin(v.x * 7.5 + seed) * Math.sin(v.z * 6.2 - seed)
+            + Math.sin((v.x + v.z) * 5.1 + seed * 2) * 0.6;
+    v.multiplyScalar(1 + g * 0.045);
+    v.y *= 0.72;                       // squat, not hemispherical
+    pos.setXYZ(i, v.x, v.y, v.z);
   }
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, mat(color, { rough: 0.85 }));
+  m.scale.setScalar(scale);
+  return m;
 }
 
+/** Table coral: a broad flat plate on a short stalk. */
+function makeTableCoral(scale, color) {
+  const g = new THREE.Group();
+  const m = mat(color, { rough: 0.8 });
+
+  const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.26, 0.9, 8), m);
+  stalk.position.y = 0.45;
+  g.add(stalk);
+
+  // Slightly domed and gently irregular at the rim, so it is a living plate
+  // rather than a dinner plate.
+  const top = new THREE.SphereGeometry(1, 36, 10, 0, Math.PI * 2, 0, Math.PI * 0.30);
+  const pos = top.attributes.position;
+  const v = new THREE.Vector3();
+  const seed = Math.random() * 10;
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const r = Math.hypot(v.x, v.z);
+    const wob = Math.sin(Math.atan2(v.z, v.x) * 5 + seed) * 0.07 * r;
+    v.x += v.x * wob; v.z += v.z * wob;
+    v.y *= 0.30;
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  top.computeVertexNormals();
+  const plate = new THREE.Mesh(top, m);
+  plate.position.y = 0.9;
+  g.add(plate);
+
+  g.scale.setScalar(scale);
+  return g;
+}
+
+/** Organ-pipe coral: a tight cluster of vertical tubes of varying height. */
+function makePipeCoral(scale, color) {
+  const g = new THREE.Group();
+  const m = mat(color, { rough: 0.78 });
+  const n = 9 + Math.floor(Math.random() * 6);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const rad = Math.random() * 0.55;
+    const h = 0.7 + Math.random() * 1.5;
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, h, 7, 1, true), m);
+    tube.position.set(Math.cos(a) * rad, h / 2, Math.sin(a) * rad);
+    tube.rotation.z = (Math.random() - 0.5) * 0.18;
+    g.add(tube);
+    // A pale rim at the mouth - open tubes read as hollow, which is the whole
+    // point of the form.
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.028, 5, 10), m);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.set(tube.position.x, h, tube.position.z);
+    g.add(rim);
+  }
+  g.scale.setScalar(scale);
+  return g;
+}
+
+// --------------------------------------------------------------- sea fan
+// ⛔ THIRD ATTEMPT AT THIS SHAPE, and the first two failures are instructive:
+//   1. An extruded Shape with alternating radii -> a yellow starburst.
+//   2. A recursive branching TREE with thin stems -> bare winter twigs.
+//
+// Both failed because a gorgonian is not a tree. Its defining feature is that
+// the branches ANASTOMOSE - they rejoin each other, forming a NET with holes
+// through it. A tree only ever divides, so it can never close a loop, and
+// without closed loops the eye reads "dead shrub" no matter how fine the stems.
+//
+// So this is built as a polar lattice instead: nodes on a fan-shaped grid,
+// connected to their radial and tangential neighbours, with struts randomly
+// omitted so the mesh is irregular. That gives closed cells, which is the thing
+// the previous versions could not produce.
 function makeFan(scale, color) {
+  const RINGS = 7;         // radial divisions
+  const SPOKES = 11;       // angular divisions
+  const SWEEP = Math.PI * 0.80;
+  const OMIT = 0.22;       // fraction of struts dropped, for irregularity
+
   const g = new THREE.Group();
   const inner = new THREE.Group();
-  // Smooth shading: a sea fan has round stems, and flatShading on a 5-sided
-  // cylinder makes them read as faceted sticks.
-  // ⛔ STEM THICKNESS IS THE WHOLE THING. At rad 0.075 the branches were as wide
-  // as they were long and the lattice closed up into solid spikes - the same
-  // starburst failure as the extruded version, just arrived at differently. A
-  // gorgonian's stems are hair-thin relative to the fan; you have to be able to
-  // see water through it.
-  const m = mat(color, { rough: 0.72, flat: false });
-  growFanBranch(inner, 1.15, 0.034, 6, 0.46, m);
-  // ⭐ BAKE THE LATTICE. Six generations of 2-3 branches is several hundred
-  // cylinders, and because the fan is in the `swaying` list every one of them
-  // was being marked keepSeparate and skipped by the scene merge - which took
-  // the board from 124 draw calls to 289. The sway rotates the fan as a whole,
-  // so nothing inside it needs to move independently.
+  const m = mat(color, { rough: 0.74 });
+
+  // Node positions on a fan, with a little jitter so the net is organic.
+  const node = (ri, si) => {
+    const r = 0.18 + (ri / RINGS) * 0.95;
+    const a = -SWEEP / 2 + (si / (SPOKES - 1)) * SWEEP;
+    // Spread widens toward the rim, which is what makes it a fan and not a pie.
+    const jitter = (h) => (Math.sin(ri * 12.9 + si * 7.3 + h) * 0.5) * 0.045;
+    return new THREE.Vector3(
+      Math.sin(a) * r + jitter(1),
+      Math.cos(a) * r * 1.15 + jitter(2),
+      jitter(3) * 1.4
+    );
+  };
+
+  const strut = (p, q, rad) => {
+    const dir = new THREE.Vector3().subVectors(q, p);
+    const len = dir.length();
+    if (len < 1e-4) return;
+    const geo = new THREE.CylinderGeometry(rad * 0.8, rad, len, 4, 1);
+    const mesh = new THREE.Mesh(geo, m);
+    mesh.position.copy(p).addScaledVector(dir, 0.5);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+    inner.add(mesh);
+  };
+
+  for (let ri = 0; ri < RINGS; ri++) {
+    for (let si = 0; si < SPOKES; si++) {
+      const p = node(ri, si);
+      // Stems thin toward the rim, as they do on a real fan.
+      const rad = 0.030 * (1 - (ri / RINGS) * 0.55);
+      // radial strut (outward)
+      if (ri < RINGS - 1 && Math.random() > OMIT) strut(p, node(ri + 1, si), rad);
+      // tangential strut - THIS is what closes the loops
+      if (si < SPOKES - 1 && ri > 0 && Math.random() > OMIT * 1.4)
+        strut(p, node(ri, si + 1), rad * 0.8);
+      // occasional diagonal, so the cells are not a regular grid
+      if (ri < RINGS - 1 && si < SPOKES - 1 && Math.random() < 0.18)
+        strut(p, node(ri + 1, si + 1), rad * 0.7);
+    }
+  }
+
+  // A short holdfast so it grows out of the rock rather than hovering.
+  const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.07, 0.3, 6), m);
+  foot.position.y = 0.05;
+  inner.add(foot);
+
   mergeInto(inner);
-  // Fans grow across the current, so they are wide and very thin. Squashing on
-  // Z after the fact keeps the branching maths simple.
-  inner.scale.set(1, 1, 0.22);
+  inner.scale.set(1, 1, 0.3);     // fans grow across the current: wide and thin
   g.add(inner);
   g.scale.setScalar(scale);
   g.userData.kind = 'fan';
@@ -458,26 +595,38 @@ export function createReef(scene, bounds, camZ = 26) {
     rock2.position.set(flip * 3.0, -0.6, 1.6);
     c.add(rock2);
 
-    const coralA = makeCoral(1.5, PALETTE.coralPink);
-    coralA.position.set(flip * -1.3, 1.2, 0.8);
-    c.add(coralA);
-    const coralB = makeCoral(1.1, PALETTE.amber);
-    coralB.position.set(flip * 2.0, 0.9, -0.5);
-    c.add(coralB);
-    const coralC = makeCoral(0.8, PALETTE.lavender);
-    coralC.position.set(flip * 0.3, 1.0, 2.1);
-    c.add(coralC);
+    // ⭐ FIVE DIFFERENT SILHOUETTES, one of each. The old garden had the same
+    // branching shape five times in different colours; this has a solid mass, a
+    // horizontal, a vertical rhythm, a fractal and a flat net. Hot pink is
+    // rationed to the branching coral alone so the garden has a focal point
+    // instead of five things shouting at once.
+    const brain = makeBrainCoral(1.5 + Math.random() * 0.4, PALETTE.brain);
+    brain.position.set(flip * -2.3, 0.5, 1.1);
+    c.add(brain);
 
-    const fan = makeFan(1.7, PALETTE.coralDeep);
-    fan.position.set(flip * 3.2, 1.2, -1.0);
+    const table = makeTableCoral(1.6, PALETTE.table);
+    table.position.set(flip * 1.9, 0.5, 1.9);
+    c.add(table);
+
+    const pipes = makePipeCoral(1.3, PALETTE.pipes);
+    pipes.position.set(flip * -0.4, 0.6, -0.6);
+    c.add(pipes);
+
+    // The accent. One hot colour, one fractal silhouette.
+    const branch = makeCoral(1.4, PALETTE.coralPink);
+    branch.position.set(flip * 0.9, 0.9, 0.4);
+    c.add(branch);
+
+    const fan = makeFan(2.0, PALETTE.coralDeep);
+    fan.position.set(flip * 3.2, 1.0, -1.0);
     fan.rotation.y = flip * 0.22;
     c.add(fan);
     swaying.push(fan);
 
     for (let i = 0; i < 2; i++) {
-      const an = makeAnemone(1.1 + Math.random() * 0.5, PALETTE.coralDeep);
-      an.position.set(flip * (-2.2 + Math.random() * 5.5), 0.7 + Math.random() * 0.6,
-                      1.2 + Math.random() * 2);
+      const an = makeAnemone(1.0 + Math.random() * 0.5, PALETTE.anemoneBase);
+      an.position.set(flip * (-2.2 + Math.random() * 5.5), 0.7 + Math.random() * 0.5,
+                      1.4 + Math.random() * 2);
       c.add(an);
       swaying.push(an);
     }

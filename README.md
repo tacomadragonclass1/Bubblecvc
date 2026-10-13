@@ -323,6 +323,53 @@ Also ⛔ keep the sediment tint **dim and cool**. A bright warm sand colour at a
 real strength bleaches coral to pale pink and the garden looks sun-faded; silt
 underwater is muted blue-grey, not beach sand in daylight.
 
+### Coral morphology — five silhouettes, not one shape in five colours
+
+The audit's second finding: **every coral was the same branching algorithm
+recoloured three times.** Pink, amber and lavender shared one silhouette, so the
+gardens read as repetitive no matter how many were added. A reef is defined by
+*contrasting forms*, and the contrast is structural, not chromatic.
+
+| Form | What it contributes |
+| --- | --- |
+| Brain / dome | A solid rounded **mass** — the gardens had none |
+| Table / plate | The strongest **horizontal** on a reef |
+| Organ pipes | A **vertical rhythm**; repetition at small scale |
+| Branching | The existing fractal — now one voice among four |
+| Sea fan | A flat **net** |
+
+**Colour is rationed.** Exactly one saturated accent (`coralPink`, on the
+branching coral) sits among muted terracotta, ochre and dusty mauve. The old
+palette was three near-identical hot pinks and the garden had no focal point —
+everything shouted at the same volume.
+
+### ⛔ A sea fan is a NET, not a tree — third attempt
+
+Two earlier versions failed into the same yellow starburst from opposite
+directions: an extruded `Shape` with alternating radii, then a recursive
+branching **tree** with hair-thin stems (which came out as bare winter twigs).
+
+Both failed for one reason: **a gorgonian anastomoses** — its branches rejoin
+each other and form closed cells you can see water through. A tree only ever
+divides, so it can never close a loop, and without closed loops the eye reads
+"dead shrub" however fine the stems are.
+
+It is now built as a **polar lattice**: nodes on a fan-shaped grid wired to their
+radial, tangential and occasional diagonal neighbours, with ~22% of struts
+randomly omitted. The tangential struts are the ones that close the cells.
+
+### Kelp translucency
+
+Kelp is a thin membrane and **glows when lit from behind** — that single property
+is most of what separates a living plant from a cut-out ribbon. Blades facing
+away from the key light get warmed and lifted rather than darkened, which is the
+opposite of ordinary shading and exactly what a leaf does.
+
+⚠️ When adding a varying to the kelp shader, note the vertex shader has
+`vUv = uv;` between `void main() {` and `vec3 p = position;` — an anchor that
+skips it will insert the assignment without the declaration, and the material
+silently fails to compile and renders nothing.
+
 ### Rocks
 
 Rebuilt — the audit called them the weakest asset *and* the largest mass, which
