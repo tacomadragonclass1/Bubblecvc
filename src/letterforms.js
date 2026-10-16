@@ -9,7 +9,9 @@
 // are actually taught to write.
 //
 // Coordinate space: x-height 70, ascenders reach -30, descenders reach 100.
-// Each entry is a list of SVG path strings, drawn in writing order.
+// Each entry is a list of strokes drawn in writing order. A stroke is an SVG
+// path string, or [path, widthScale] to stroke it thinner than the rest of the
+// glyph - used only by the i/j dot, see below.
 export const PATHS = {
   a:['M60 30 C60 12 48 0 30 0 C10 0 0 15 0 35 C0 55 10 70 30 70 C48 70 60 58 60 40','M60 0 L60 70'],
   b:['M0 -30 L0 70','M0 30 C0 12 12 0 30 0 C50 0 60 15 60 35 C60 55 50 70 30 70 C12 70 0 58 0 40'],
@@ -19,8 +21,16 @@ export const PATHS = {
   f:['M45 -25 C26 -38 15 -24 15 -8 L15 70','M0 8 L38 8'],
   g:['M60 30 C60 12 48 0 30 0 C10 0 0 15 0 35 C0 55 10 70 30 70 C48 70 60 58 60 40','M60 0 L60 76 C60 105 26 110 7 94'],
   h:['M0 -30 L0 70','M0 29 C0 10 13 0 29 0 C46 0 55 11 55 28 L55 70'],
-  i:['M0 -24 L0 -23.9','M0 0 L0 70'],
-  j:['M25 -24 L25 -23.9','M25 0 L25 78 C25 96 14 103 0 96'],
+  // The dot is a zero-length stroke, so a round cap turns it into a disc of
+  // radius lineWidth/2. At the 26-unit stroke this app draws with, that disc
+  // is 13 tall and the stem's own round cap already reaches 13 ABOVE the
+  // x-height line - so a dot centred at -24 overlapped the stem by 2 units and
+  // the two fused into one blob. Centre it at -34 and draw it at 0.85 width:
+  // that opens a 9.9-unit gap, and puts the top of the dot at -45, just clear
+  // of the -43 that the ascenders of b/d/h/l reach. Both numbers are tied to
+  // the stroke width - revisit them together if that 26 ever changes.
+  i:[['M0 -34 L0 -33.9', 0.85],'M0 0 L0 70'],
+  j:[['M25 -34 L25 -33.9', 0.85],'M25 0 L25 78 C25 96 14 103 0 96'],
   k:['M0 -30 L0 70','M53 0 L0 38 L56 70'],
   l:['M0 -30 L0 70'],
   m:['M0 0 L0 70','M0 25 C0 -8 44 -8 44 25 L44 70','M44 25 C44 -8 88 -8 88 25 L88 70'],
@@ -79,11 +89,12 @@ export function glyphCanvas(ch, size = 256, lineWidth = 9) {
   g.translate(ox, oy);
   g.scale(scale, scale);
   g.strokeStyle = '#fff';
-  g.lineWidth = lineWidth;
   g.lineCap = 'round';
   g.lineJoin = 'round';
 
-  for (const d of PATHS[ch] || []) {
+  for (const stroke of PATHS[ch] || []) {
+    const [d, widthScale] = Array.isArray(stroke) ? stroke : [stroke, 1];
+    g.lineWidth = lineWidth * widthScale;
     g.stroke(new Path2D(d));
   }
   g.restore();
