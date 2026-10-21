@@ -618,6 +618,25 @@ The beat, in order: snout enters at the far edge (u ≈ 0.26) · head and gills
 fill a third of the frame in the foreground (u ≈ 0.46) · body and tail stream
 past · clear of the frame by u ≈ 0.96.
 
+### ⭐ Spell "big" and the shark comes
+
+`SUMMON_WORDS` in `main.js`, a set so the obvious next request is a one-word
+edit. Only words the board can actually spell with three dice.
+
+The payoff is deliberately **after** the blend. `summon()` does not start a
+pass — it makes one *due*, and the ordinary idle gate then holds it until the
+spoken word has finished. A child spells it, hears it said back, and then the
+water goes dark. Starting the pass directly would put a forty-unit shark across
+the board while the voice was still playing, which is the one thing the gate
+exists to prevent.
+
+Measured, spelling it live: word reads `big` at 874 ms · pass goes due at
+1010 ms and is held while the word is spoken · shark enters at 4235 ms.
+
+It fires once per spelling, because `speakIfReady` guards on `lastSpoken` — a
+child has to break the word and rebuild it to call the shark again, which is
+friction enough that no cooldown is needed.
+
 ### Freezing a frame to judge it
 
 `__bubblecvc.timeScale = 0` stops the clock. This matters more than it sounds:

@@ -340,6 +340,22 @@ export function createSharkPass(scene, creatures) {
      * is still sitting at zero.
      */
     reschedule(now = clockT) { clockT = now; nextAt = now + rand(FIRST_MIN, FIRST_MAX); },
+    /**
+     * Call the shark. Used by the summoning word (see SUMMON_WORDS in main.js).
+     *
+     * ⭐ This does NOT begin a pass - it makes one DUE. The ordinary gate then
+     * holds it until the board is idle, which means until the spoken word has
+     * finished. That is the whole effect: a child spells the word, hears it
+     * said back, and THEN the water goes dark. Starting the pass directly would
+     * put a forty-unit shark across the board while the blend is still playing,
+     * which is the one thing the gate exists to prevent.
+     */
+    summon() {
+      if (active) return false;        // already here
+      nextAt = clockT;
+      waitingSince = 0;
+      return true;
+    },
     /** Debug / preview: start one now, ignoring the schedule. */
     now() { if (!active) begin(); },
     dispose() {

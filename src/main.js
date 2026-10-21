@@ -60,6 +60,16 @@ let reefRebuildTimer = null;
 
 const SLOTS = 3;
 
+// ⭐ Spell one of these and the shark comes.
+//
+// The payoff is deliberately AFTER the blend: summon() only makes a pass due,
+// and the ordinary idle gate holds it until the spoken word has finished. A
+// child spells it, hears it said back, and then the water goes dark.
+//
+// Kept as a set because the obvious next request is a second word. Lower case,
+// and only words the board can actually spell with three dice.
+const SUMMON_WORDS = new Set(['big']);
+
 // Respected throughout the idle animations and the pop. Motion is reduced, never
 // removed: the bubbles still have to read as suspended in water.
 const reducedMotion = window.matchMedia
@@ -386,6 +396,10 @@ function speakIfReady() {
   const key = seq.join('');
   if (key === lastSpoken) return;
   lastSpoken = key;
+
+  // The summoning word. Checked before the blend is queued, so the pass is
+  // already due by the time the voice finishes and the shark follows it in.
+  if (shark && SUMMON_WORDS.has(key.toLowerCase())) shark.summon();
 
   A.sfxComplete();
   // Small delay so the capture glug has room before the voice starts.
