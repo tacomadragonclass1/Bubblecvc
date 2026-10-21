@@ -24,13 +24,14 @@ import * as A from './audio.js';
 import { createPrescreen } from './prescreen.js';
 import { createPopFX } from './pop.js';
 import { loadCreatures } from './creatures.js';
+import { createSharkPass } from './shark.js';
 import { updateWater } from './lightwater.js';
 
 const FOV = 45;
 const CAM_Z = 26;
 
 let renderer, scene, camera, waterScene, waterCam, water;
-let ocean, reef, bubbleSet, bubbles, popFX, creatures = null;
+let ocean, reef, bubbleSet, bubbles, popFX, creatures = null, shark = null;
 let bounds = { x: 19, y: 10.8 };
 let bayTop = -4.6;
 let dice = [];                 // every die currently in the bay or in motion
@@ -39,6 +40,18 @@ let prescreen, homeBtn, replayBtn;
 let running = false;
 let clock = null;
 let lastSpoken = '';           // guards against re-speaking the same state
+// Scene time at which the spoken blend finishes. The shark pass reads this: the
+// board can look perfectly still while a word is still coming out of the
+// speakers, and that is the worst possible moment to move something big behind
+// the letters.
+//
+// ⛔ NOT a boolean cleared when A.blend() resolves. blend() SCHEDULES the whole
+// sequence on the audio clock and returns its length in seconds - the promise
+// settles as soon as the buffers are queued, about a quarter of a second in,
+// with two more seconds of speech still to come. Measured: the flag cleared at
+// frame 142 for a word that was still playing. The returned duration is the
+// real end, so that is what gets stored.
+let blendUntil = 0;
 // Debug only, driven from window.__bubblecvc.timeScale. Lets the pop sequence
 // be watched frame by frame - the timing in pop.js was tuned this way.
 let timeScale = 1;
@@ -97,6 +110,10 @@ function init() {
     // Rebuild just the swimmers, now that real models are available.
     scene.remove(ocean.group);
     ocean = createOcean(scene, bounds, creatures);
+    // The hero shark needs a real model and returns null without one, in which
+    // case there is simply no event - same fail-soft rule as the rest of the
+    // pack. Built once; resize does not rebuild it.
+    shark = createSharkPass(scene, creatures);
     console.info('[bubblecvc] modelled creatures loaded:', lib.count, lib.kinds.join(', '));
   });
 
@@ -365,7 +382,35 @@ function speakIfReady() {
 
   A.sfxComplete();
   // Small delay so the capture glug has room before the voice starts.
-  setTimeout(() => A.blend(seq, { thenWhole: true }), 260);
+  // The provisional hold covers the gap between here and blend() reporting its
+  // real length; a failure to load audio clears it rather than wedging it.
+  blendUntil = clock.elapsed + 3;
+  setTimeout(() => {
+    A.blend(seq, { thenWhole: true })
+      .then(secs => {
+        blendUntil = clock.elapsed + (Number.isFinite(secs) ? secs : 2.5);
+      })
+      .catch(() => { blendUntil = 0; });
+  }, 260);
+}
+
+/**
+ * Is it safe to START a shark pass? Not "is the app running" - this is about
+ * whether a child is mid-task. Anything in flight, anything being captured or
+ * returning, a bubble popping, or a word being spoken all mean no.
+ *
+ * The prescreen counts as idle on purpose: a shark crossing the attract screen
+ * costs nothing and sets up the world before the lesson starts.
+ */
+function isIdle() {
+  if (!running) return true;
+  if (clock.elapsed < blendUntil) return false;
+  for (const die of dice) {
+    const st = die.userData.state;
+    if (st === 'flying' || st === 'capturing' || st === 'returning') return false;
+  }
+  if (bubbles) for (const b of bubbles) if (b.popping > 0) return false;
+  return true;
 }
 
 // ---------------------------------------------------------------- main loop
@@ -378,7 +423,15 @@ function frame() {
 
   water.material.uniforms.uTime.value = t;
   updateWater(t);
-  updateOcean(ocean, bounds, t, dt);
+  // Before updateOcean: the fish scatter from where the shark IS this frame,
+  // not from where it was last one.
+  if (shark) {
+    shark.update(t, dt, { idle: isIdle(), camera, bounds });
+    const lit = shark.light();
+    water.material.uniforms.uEclipse.value = lit.amount;
+    water.material.uniforms.uEclipseX.value = lit.x;
+  }
+  updateOcean(ocean, bounds, t, dt, shark ? shark.threat() : null);
   updateReef(reef, t, reducedMotion, dt);
   if (popFX) popFX.update(dt);
   if (creatures) creatures.update(dt);
@@ -438,6 +491,23 @@ window.__bubblecvc = {
   get slots() { return bubbles ? bubbles.map(b => b.die ? b.die.userData.ch : null) : null; },
   get word() { return currentWord(); },
   get bounds() { return bounds; },
+  // The live scene graph. Art direction on a thing that moves cannot be done by
+  // reading source - this is how the shark's lane, scale and shading were
+  // actually set, by measuring the rendered result from the console.
+  get scene() { return scene; },
+  // The shark's timing gate, exposed so it can actually be checked: throw a
+  // die, read this, and confirm it goes false while the board is in use.
+  get idle() { return isIdle(); },
+  // A pass is minutes away by design, which makes it untestable by waiting.
+  // sharkNow() starts one immediately; shark.eta is the seconds remaining.
+  sharkNow() { if (shark) shark.now(); return !!shark; },
+  get shark() {
+    if (!shark) return null;
+    const lit = shark.light();
+    return { active: shark.active, eta: +shark.eta.toFixed(1),
+             progress: +shark.progress.toFixed(3),
+             eclipse: +lit.amount.toFixed(3), eclipseX: +lit.x.toFixed(3) };
+  },
   /** z of each travelling reef band - proves the conveyor is advancing. */
   get reefZ() { return reef && reef.bands ? reef.bands.map(b => +b.position.z.toFixed(2)) : null; },
   /** Renderer statistics - draw calls, triangles, live GPU resources. */

@@ -37,6 +37,12 @@ const waterFrag = /* glsl */`
   varying vec2 vUv;
   uniform float uTime;
   uniform vec2  uAspect;
+  // How much light the hero shark is blocking (0-1) and where it is across the
+  // screen (uv.x). A travelling shadow, not a global dim: the whole frame going
+  // dark reads as a bug, while light falling off UNDER the body and coming back
+  // is what tells you something enormous just went over.
+  uniform float uEclipse;
+  uniform float uEclipseX;
 
   // Cheap value noise - enough for drifting caustics, far cheaper than simplex.
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -75,6 +81,10 @@ const waterFrag = /* glsl */`
       rays += shaft * (0.55 - fi * 0.10);
     }
     rays *= smoothstep(-0.05, 0.9, uv.y);
+    // Wide and soft - the shadow of a body 39 units long, seen through water,
+    // has no edge at all.
+    float ecl = uEclipse * exp(-pow((uv.x - uEclipseX) / 0.42, 2.0));
+    rays *= 1.0 - ecl * 0.78;
     // Warm the rays very slightly - sunlight through water is not pure cyan,
     // and this is what stops the whole frame reading as one flat hue.
     col += vec3(0.80, 0.94, 0.88) * rays * 0.17;
@@ -91,6 +101,7 @@ const waterFrag = /* glsl */`
     float ridge = max(0.0, 1.0 - abs(c1 - c2) * 2.6);
     float caustic = pow(ridge, 6.0);
     caustic *= smoothstep(0.02, 0.75, uv.y);
+    caustic *= 1.0 - ecl * 0.55;
     col += vec3(0.50, 0.90, 0.98) * caustic * 0.17;
 
     // A much larger, softer wash for low-frequency variation, so the water is
@@ -103,6 +114,11 @@ const waterFrag = /* glsl */`
     // Atmospheric perspective: the far water lifts toward the mid blue, which
     // is what makes the foreground creatures read as nearer.
     col = mix(col, mid * 1.15, 0.12);
+
+    // A touch of the water itself darkening under the shark, so the dip is not
+    // only in the highlights. Small: 8% is the difference between "a cloud went
+    // over" and "the renderer glitched".
+    col *= 1.0 - ecl * 0.08;
 
     // ---- vignette ----------------------------------------------------------
     // Elliptical and gentle, pulling attention to the bubble row.
@@ -121,6 +137,8 @@ export function makeWater() {
     uniforms: {
       uTime: { value: 0 },
       uAspect: { value: new THREE.Vector2(1, 1) },
+      uEclipse: { value: 0 },
+      uEclipseX: { value: 0.5 },
     },
     depthWrite: false,
     depthTest: false,
@@ -338,6 +356,10 @@ export function createOcean(scene, bounds, creatures = null) {
   spawn(build('fish', 0.90, 0.55), LANES[2], 2.2, 0.9);
   spawn(build('fish', 0.55, 0.02), LANES[1], 3.9, 1.8);
   spawn(build('octopus', 0.85), LANES[3], 1.2, 0.5);
+  // The deep lane is the WHALE (see manifest.json): slow, far, permanent
+  // traffic. The shark was pulled out of the routine cast entirely - it is an
+  // event now, in src/shark.js, and a small one cruising here all day would
+  // spend the surprise that event depends on.
   spawn(build('shark', 0.90), LANES[4], 1.9, 0.35);
 
   // ---- lighting ----------------------------------------------------------
@@ -382,14 +404,43 @@ function resetSwimmer(m, bounds, anywhere = false) {
   m.rotation.y = dir > 0 ? 0 : Math.PI;
 }
 
-export function updateOcean(ocean, bounds, t, dt) {
+/**
+ * `threat` is the hero shark's position while it is crossing, or null. The
+ * scatter lives HERE rather than in shark.js because this loop owns baseY and
+ * rewrites it every frame - anything the shark pushed from outside would be
+ * overwritten before it was ever drawn.
+ */
+export function updateOcean(ocean, bounds, t, dt, threat = null) {
   for (const m of ocean.swimmers) {
     const u = m.userData;
-    m.position.x += u.dir * u.speed * dt;
+
+    // ---- get out of the way ------------------------------------------------
+    // The scene noticing the shark is most of what makes it real. The flee
+    // value decays slowly, so fish stay unsettled for a few seconds after it
+    // has gone by instead of snapping back to a cruise the instant it passes.
+    if (threat) {
+      const dx = m.position.x - threat.x;
+      const dz = (m.position.z - threat.z) * 0.6;
+      const d = Math.hypot(dx, dz);
+      if (d < threat.radius) {
+        const k = 1 - d / threat.radius;
+        u.flee = Math.min(1, (u.flee || 0) + k * dt * 2.4);
+        // Away from the body, vertically. Sign is taken once per frame from
+        // where the fish already is, so a school does not all pick "up".
+        const away = (m.position.y >= threat.y ? 1 : -1);
+        u.baseY = THREE.MathUtils.clamp(
+          u.baseY + away * k * 7.5 * dt, -bounds.y * 0.95, bounds.y * 0.95);
+      }
+    }
+    u.flee = Math.max(0, (u.flee || 0) - dt * 0.45);
+
+    m.position.x += u.dir * u.speed * (1 + u.flee * 1.9) * dt;
     m.position.y = u.baseY + Math.sin(t * 0.6 + u.phase) * u.yJitter;
 
     // Gentle bank into the bob, which is what sells "swimming" over "sliding".
-    const bank = Math.cos(t * 0.6 + u.phase) * 0.12;
+    // A fleeing fish banks harder, which is the tell that it is bolting rather
+    // than cruising faster.
+    const bank = Math.cos(t * 0.6 + u.phase) * (0.12 + u.flee * 0.3);
     m.rotation.z = u.dir > 0 ? bank : -bank;
 
     // A modelled creature carries its own baked swim animation - the hand-rolled

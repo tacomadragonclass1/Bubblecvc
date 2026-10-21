@@ -464,9 +464,111 @@ animation clips read, and `AnimationMixer` driving them. `GLTFLoader`,
 `SkeletonUtils` and `BufferGeometryUtils` are vendored in `vendor/jsm/` with
 their bare `'three'` imports rewritten to the local build.
 
+### ⛔ `yaw` is not decoration — the whole pack shipped swimming sideways
+
+Every entry in `manifest.json` said `yaw: 0`, and every model in the Quaternius
+pack points down **+Z** while `ocean.js` swims its creatures along **+X**. The
+entire cast — fish, manta, dolphin, whale, shark — was therefore crabbing
+sideways across the screen for weeks. It is not obvious at background scale,
+which is exactly why it survived; it became impossible to miss the moment the
+shark was scaled to 39 units.
+
+Every entry is now `yaw: 1.5708`. If you add a model, check it: a skinned mesh's
+extent along X should be its LENGTH, not its width.
+
+```js
+// in the console, with the pack loaded
+skin.computeBoundingBox();
+const b = skin.boundingBox.clone().applyMatrix4(skin.matrixWorld);
+b.max.x - b.min.x   // should be the long axis
+```
+
 ⛔ **Models are committed, not gitignored.** Pages serves what is in the repo, so
 an ignored model loads locally and 404s in the classroom. CC0 is what makes that
 fine.
+
+## The hero shark (`src/shark.js`)
+
+One enormous shark crosses the scene every few minutes and is then gone for
+several more. It is the only creature in the app that is an **event** rather
+than traffic.
+
+**The model is not what makes it work.** It is the same 644-triangle CC0
+Quaternius shark that was already in the pack — what changed is staging:
+
+| lever | value | why |
+| --- | --- | --- |
+| length | ~39 units | about half the screen width at its lane |
+| crossing | 30 s | under ~18 s it reads as a fast fish, not a big animal |
+| lane | z −35 → −28 | nearer than the deep lane (−50), still well behind the play plane |
+| tail beat | `mixer.timeScale = 0.42` | does more for the sense of mass than the scale does |
+| gap | 4–7 min (first at 1–2 min) | rarity is the whole effect |
+
+Check any replacement model by its **outline**, not its wireframe. A
+near-silhouette shows nothing but profile, which is why the low poly count costs
+nothing here.
+
+### ⛔ A pass only ever STARTS when the board is idle
+
+`isIdle()` in `main.js`: nothing flying, capturing or returning, no bubble
+popping, and **no word still being spoken**. A 39-unit dark shape sweeping
+behind the letters while a child is sounding out a word is exactly the kind of
+distraction the die-roll clamp exists to prevent — it just arrives in time
+rather than in space. If the window comes up mid-word the pass waits; it is not
+skipped. Once started it always finishes, because a shark that vanishes in open
+water reads as a bug.
+
+⛔ **The speech hold is a deadline, not a flag.** `A.blend()` *schedules* the
+whole sequence on the audio clock and returns its length in seconds — the
+promise settles about a quarter-second in, with two more seconds of speech still
+to come. A boolean cleared on resolve was measured releasing the gate at frame
+142 of a word that was still playing. `blendUntil` stores the real end instead.
+
+### ⛔ It passes UNDER the bubble row, never through it
+
+The first version entered at 0.28–0.52 of the half-height, which is where the
+bubbles are. The band is now −0.20 → −0.42, low enough that the **dorsal fin**
+clears the bubbles too: a dark fin behind a bubble takes contrast away from the
+letter inside it.
+
+### ⛔ The off-screen margin is measured at the shark's depth, not the play plane
+
+`bounds.x` is the half-width at z = 0. The shark runs 30 units behind that,
+where the frustum is more than twice as wide — 44 world units against 21.
+Using the play-plane figure left the tail still on screen at the end of the
+crossing, so the shark vanished in open water. `edgeX()` recomputes it from the
+camera every pass, because it also depends on the window's aspect ratio.
+
+### The light dips as it goes over
+
+`uEclipse` / `uEclipseX` in the water shader fade the god rays (−78%) and the
+caustics (−55%) under the body, and `waterUniforms.uCausticStrength` dips the
+caustics on the geometry at the same time. It is a travelling shadow, not a
+global dim — the whole frame going dark reads as a bug. This is the touch that
+makes the pass land; it is cheap and it is not optional.
+
+### The fish get out of the way
+
+`updateOcean` takes a `threat` and the swimmers bank away and accelerate inside
+26 units of it, then stay unsettled for a few seconds after. The scatter lives
+in `ocean.js` rather than `shark.js` because that loop owns `baseY` and rewrites
+it every frame — anything pushed from outside would be overwritten before it was
+ever drawn.
+
+### Driving it from the console
+
+A pass is minutes away by design, which makes it untestable by waiting:
+
+```js
+__bubblecvc.sharkNow()   // start one now
+__bubblecvc.shark        // { active, eta, progress, eclipse, eclipseX }
+__bubblecvc.idle         // the timing gate
+__bubblecvc.scene        // the live scene graph
+```
+
+Art direction on something that moves cannot be done by reading source. The
+lane, the scale and the counter-shading above were all set by measuring the
+rendered result from the console.
 
 ## Not built yet
 

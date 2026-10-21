@@ -14,8 +14,8 @@ Every one is a single skinned mesh with one `Swim` clip. 528 KB for the set.
 | --- | --- | --- |
 | `fish-a/b/c.glb` | fish | the three background fish |
 | `manta-ray.glb` | fish | scaled up — it is a big animal |
-| `shark.glb` | shark | |
-| `whale.glb` | shark | shares the deep, slow lane |
+| `shark.glb` | **hero** | the periodic hero pass — see `src/shark.js` |
+| `whale.glb` | shark | the deep, slow lane |
 | `dolphin.glb` | octopus | the pack has no octopus; the dolphin takes that lane so no procedural creature is left on screen |
 
 ## Where to get more
@@ -32,16 +32,21 @@ CC0 means no attribution is required, so these can ship inside this repo.
 
 ```json
 {
-  "fish":    [ { "file": "clownfish.glb", "scale": 1.0, "yaw": 0 },
-               { "file": "tuna.glb",      "scale": 1.2, "yaw": 0 } ],
+  "fish":    [ { "file": "clownfish.glb", "scale": 1.0, "yaw": 1.5708 },
+               { "file": "tuna.glb",      "scale": 1.2, "yaw": 1.5708 } ],
   "shark":   [ { "file": "shark.glb",     "scale": 1.4, "yaw": 1.5708 } ],
-  "octopus": [ { "file": "octopus.glb",   "scale": 0.9, "yaw": 0 } ]
+  "octopus": [ { "file": "octopus.glb",   "scale": 0.9, "yaw": 1.5708 } ]
 }
 ```
 
 - `yaw` — radians needed to make the model face **+X**, the direction the ocean
   assumes a creature swims. If a fish swims backwards, this is the knob
   (`1.5708` = 90°, `3.1416` = 180°).
+  ⛔ **Every model in this pack needs `1.5708`.** They point down +Z. Shipping
+  them at `yaw: 0` had the whole cast swimming sideways — invisible at
+  background scale, glaring once the shark was scaled up. Measure a new model,
+  do not assume: with the pack loaded, a skinned mesh's X extent should be its
+  length.
 - `scale` — a multiplier *after* the loader normalises every model to a common
   size, so you are nudging, not converting units.
 - `clip` — optional animation name; omitted plays the first clip.

@@ -3,41 +3,43 @@
     {
       "file": "fish-a.glb",
       "scale": 1.0,
-      "yaw": 0
+      "yaw": 1.5708
     },
     {
       "file": "fish-b.glb",
       "scale": 1.0,
-      "yaw": 0
+      "yaw": 1.5708
     },
     {
       "file": "fish-c.glb",
       "scale": 1.0,
-      "yaw": 0
+      "yaw": 1.5708
     },
     {
       "file": "manta-ray.glb",
       "scale": 1.5,
-      "yaw": 0
+      "yaw": 1.5708
     }
   ],
   "shark": [
     {
-      "file": "shark.glb",
-      "scale": 1.9,
-      "yaw": 0
-    },
-    {
       "file": "whale.glb",
       "scale": 2.3,
-      "yaw": 0
+      "yaw": 1.5708
     }
   ],
   "octopus": [
     {
       "file": "dolphin.glb",
       "scale": 1.5,
-      "yaw": 0
+      "yaw": 1.5708
+    }
+  ],
+  "hero": [
+    {
+      "file": "shark.glb",
+      "scale": 1.0,
+      "yaw": 1.5708
     }
   ]
 }
