@@ -24,6 +24,7 @@
 // highlights to mean anything.
 
 import * as THREE from '../vendor/three.module.js';
+import { halfWidthAt } from './frustum.js';
 import { makeUnderwater, bakeReefShading, waterUniforms } from './lightwater.js';
 
 // ---------------------------------------------------------------- geometry merge
@@ -574,7 +575,8 @@ const FLOOR_Y = -40;
  * Build the reef. `bounds` is the visible half-extent of the play plane.
  * `camZ` is kept for the static horizon, which is still screen-placed.
  */
-export function createReef(scene, bounds, camZ = 26) {
+export function createReef(scene, bounds, camera = null, camZ = 26) {
+  if (camera) camZ = camera.position.z;
   const group = new THREE.Group();
   scene.add(group);
   const swaying = [];
@@ -586,55 +588,85 @@ export function createReef(scene, bounds, camZ = 26) {
   const FLOOR = FLOOR_Y;
   waterUniforms.uFloorY.value = FLOOR_Y;
 
-  const buildCluster = (flip) => {
+  /**
+   * One garden. `flip` mirrors the arrangement; `rich` is 0-1 and decides how
+   * much is in it, so a row of clusters reads as a varied reef rather than the
+   * same bouquet repeated across the sea bed.
+   *
+   * ⭐ The five-silhouette rule still holds INSIDE a cluster: a solid mass, a
+   * horizontal, a vertical rhythm, a fractal and a flat net. What varies now is
+   * WHICH of them show up and where, not the principle. Hot pink is still
+   * rationed - only some clusters get the branching coral, so the eye has one
+   * focal point per stretch of reef instead of a row of them.
+   */
+  const buildCluster = (flip, rich = 1) => {
     const c = new THREE.Group();
+    const chance = p => Math.random() < p;
+    const jit = (a, b) => a + Math.random() * (b - a);
 
-    const rock = makeRock(2.9, PALETTE.rock);
+    const rock = makeRock(2.9 * jit(0.8, 1.25), PALETTE.rock);
+    rock.rotation.y = Math.random() * 6.28;
     c.add(rock);
-    const rock2 = makeRock(1.9, PALETTE.rockDeep);
-    rock2.position.set(flip * 3.0, -0.6, 1.6);
-    c.add(rock2);
+    if (chance(0.8)) {
+      const rock2 = makeRock(1.9 * jit(0.75, 1.3), PALETTE.rockDeep);
+      rock2.position.set(flip * jit(2.2, 3.8), -0.6, jit(0.8, 2.4));
+      rock2.rotation.y = Math.random() * 6.28;
+      c.add(rock2);
+    }
 
     // ⭐ FIVE DIFFERENT SILHOUETTES, one of each. The old garden had the same
     // branching shape five times in different colours; this has a solid mass, a
     // horizontal, a vertical rhythm, a fractal and a flat net. Hot pink is
     // rationed to the branching coral alone so the garden has a focal point
     // instead of five things shouting at once.
-    const brain = makeBrainCoral(1.5 + Math.random() * 0.4, PALETTE.brain);
-    brain.position.set(flip * -2.3, 0.5, 1.1);
-    c.add(brain);
+    if (chance(0.25 + 0.6 * rich)) {
+      const brain = makeBrainCoral(jit(1.3, 2.0), PALETTE.brain);
+      brain.position.set(flip * jit(-3.2, -1.6), 0.5, jit(0.6, 1.8));
+      c.add(brain);
+    }
 
-    const table = makeTableCoral(1.6, PALETTE.table);
-    table.position.set(flip * 1.9, 0.5, 1.9);
-    c.add(table);
+    if (chance(0.3 + 0.55 * rich)) {
+      const table = makeTableCoral(jit(1.3, 2.1), PALETTE.table);
+      table.position.set(flip * jit(1.2, 2.8), jit(0.4, 0.9), jit(1.2, 2.4));
+      table.rotation.y = Math.random() * 6.28;
+      c.add(table);
+    }
 
-    const pipes = makePipeCoral(1.3, PALETTE.pipes);
-    pipes.position.set(flip * -0.4, 0.6, -0.6);
-    c.add(pipes);
+    if (chance(0.3 + 0.5 * rich)) {
+      const pipes = makePipeCoral(jit(1.0, 1.7), PALETTE.pipes);
+      pipes.position.set(flip * jit(-1.4, 0.8), 0.6, jit(-1.4, 0.2));
+      c.add(pipes);
+    }
 
-    // The accent. One hot colour, one fractal silhouette.
-    const branch = makeCoral(1.4, PALETTE.coralPink);
-    branch.position.set(flip * 0.9, 0.9, 0.4);
-    c.add(branch);
+    // The accent. One hot colour, one fractal silhouette - and NOT in every
+    // cluster, or the focal point stops being a focal point.
+    if (chance(0.22 + 0.4 * rich)) {
+      const branch = makeCoral(jit(1.1, 1.8), PALETTE.coralPink);
+      branch.position.set(flip * jit(0.2, 1.8), 0.9, jit(0.0, 1.0));
+      c.add(branch);
+    }
 
-    const fan = makeFan(2.0, PALETTE.coralDeep);
-    fan.position.set(flip * 3.2, 1.0, -1.0);
-    fan.rotation.y = flip * 0.22;
-    c.add(fan);
-    swaying.push(fan);
+    if (chance(0.35 + 0.45 * rich)) {
+      const fan = makeFan(jit(1.6, 2.4), PALETTE.coralDeep);
+      fan.position.set(flip * jit(2.4, 4.0), 1.0, jit(-1.8, -0.4));
+      fan.rotation.y = flip * jit(0.1, 0.45);
+      c.add(fan);
+      swaying.push(fan);
+    }
 
-    for (let i = 0; i < 2; i++) {
-      const an = makeAnemone(1.0 + Math.random() * 0.5, PALETTE.anemoneBase);
-      an.position.set(flip * (-2.2 + Math.random() * 5.5), 0.7 + Math.random() * 0.5,
-                      1.4 + Math.random() * 2);
+    const anemones = Math.round(jit(0, 1 + 2 * rich));
+    for (let i = 0; i < anemones; i++) {
+      const an = makeAnemone(jit(0.9, 1.6), PALETTE.anemoneBase);
+      an.position.set(flip * jit(-2.6, 3.4), jit(0.6, 1.3), jit(1.2, 3.4));
       c.add(an);
       swaying.push(an);
     }
 
-    for (let i = 0; i < 3; i++) {
-      const k = makeKelp(4 + Math.random() * 2.5, 0.58,
+    const strands = Math.round(jit(1, 2 + 2.5 * rich));
+    for (let i = 0; i < strands; i++) {
+      const k = makeKelp(jit(3.4, 7.0), jit(0.46, 0.7),
                          i % 2 ? PALETTE.kelpLight : PALETTE.kelpDark);
-      k.position.set(flip * (2.5 + Math.random() * 7), 0.3, -1.5 - Math.random() * 3);
+      k.position.set(flip * jit(1.8, 9.0), 0.3, jit(-4.5, -1.2));
       c.add(k);
       swaying.push(k);
     }
@@ -648,18 +680,39 @@ export function createReef(scene, bounds, camZ = 26) {
 
   for (let i = 0; i < BANDS; i++) {
     const band = new THREE.Group();
+    const bandZ = Z_BACK + (i * SPAN) / BANDS;
 
-    for (const flip of [-1, 1]) {
-      const c = buildCluster(flip);
-      c.scale.setScalar(2.2 + Math.random() * 0.6);
-      c.position.set(flip * SIDE * (0.86 + Math.random() * 0.3),
-                     FLOOR, (Math.random() - 0.5) * 10);
+    // ⛔ THE REEF IS LAID OUT ACROSS THE FRUSTUM AT THE BAND'S OWN DEPTH, not
+    // across bounds.x. This band sits 56-138 units from the camera, where the
+    // picture is 92-228 world units wide; two clusters at +-25 left the whole
+    // left and right of the sea bed as empty water, which is exactly what it
+    // looked like. Width is measured at the NEAR end of the band's travel, so
+    // the row still spans the screen when it has come forward.
+    const reach = camera ? halfWidthAt(camera, Math.max(bandZ, Z_FRONT)) * 1.08
+                         : SIDE * 1.6;
+    // One garden roughly every 26 units, so a wide screen gets more reef
+    // rather than the same two gardens stretched further apart.
+    const count = Math.max(3, Math.min(7, Math.round((reach * 2) / 26)));
+    for (let n = 0; n < count; n++) {
+      // Evenly spaced, then jittered by most of a slot - regular enough to
+      // cover the floor, irregular enough not to read as a row of planters.
+      const slot = (n + 0.5) / count;
+      const x = (slot - 0.5) * 2 * reach + (Math.random() - 0.5) * (reach * 1.4 / count);
+      const flip = x < 0 ? -1 : 1;
+      // Richness falls off toward the edges of frame: the middle of the sea
+      // bed is what the eye reads, and the sides are a soft frame for it.
+      const rich = 0.35 + 0.65 * (1 - Math.min(1, Math.abs(x) / reach));
+      const c = buildCluster(flip, rich);
+      c.scale.setScalar((1.6 + Math.random() * 0.9) * (1 + 0.35 * rich));
+      c.position.set(x, FLOOR, (Math.random() - 0.5) * 12);
+      c.rotation.y = (Math.random() - 0.5) * 0.5;
       band.add(c);
     }
 
     // Floor litter between the gardens, so the sea bed reads as continuous
-    // rather than as two islands sliding past.
-    for (let j = 0; j < 7; j++) {
+    // rather than as islands sliding past.
+    const litter = Math.round(count * 3.5);
+    for (let j = 0; j < litter; j++) {
       const kind = Math.random();
       let o;
       if (kind < 0.62) { o = makeRock(1.4 + Math.random() * 2.4, 0x1c4360); o.material = stoneMat; }
@@ -668,9 +721,9 @@ export function createReef(scene, bounds, camZ = 26) {
         o.scale.set(1, 0.6, 1);
         o.rotation.set(0.3, Math.random() * 6.28, 0.2);
       } else { o = new THREE.Mesh(new THREE.SphereGeometry(0.7, 12, 10), pearlMat); }
-      o.position.set((Math.random() - 0.5) * SIDE * 2.6,
+      o.position.set((Math.random() - 0.5) * reach * 2.1,
                      FLOOR + (Math.random() - 0.5) * 3,
-                     (Math.random() - 0.5) * 12);
+                     (Math.random() - 0.5) * 14);
       band.add(o);
     }
 
@@ -689,7 +742,7 @@ export function createReef(scene, bounds, camZ = 26) {
       for (const m of mats) makeUnderwater(m, { caustics: 1.0, fog: 1.0 });
     });
 
-    band.position.z = Z_BACK + (i * SPAN) / BANDS;
+    band.position.z = bandZ;
     group.add(band);
     bands.push(band);
   }
@@ -710,11 +763,13 @@ export function createReef(scene, bounds, camZ = 26) {
   // The far reef barely moves - that IS correct parallax, and it also gives the
   // eye something stable to read the travelling bands against.
   const horizon = new THREE.Group();
-  const reefA = makeDistantReef(bounds.x * 3.4);
+  const reefA = makeDistantReef(
+    (camera ? halfWidthAt(camera, -78) * 2.2 : bounds.x * 3.4));
   reefA.position.set(0, -bounds.y * 1.02 * ((camZ + 78) / camZ), -78);
   reefA.scale.multiplyScalar((camZ + 78) / camZ);
   horizon.add(reefA);
-  const reefB = makeDistantReef(bounds.x * 2.8);
+  const reefB = makeDistantReef(
+    (camera ? halfWidthAt(camera, -58) * 1.9 : bounds.x * 2.8));
   reefB.material = reefB.material.clone();
   reefB.material.color.setHex(0x0e3450);
   reefB.material.opacity = 0.55;

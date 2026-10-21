@@ -97,8 +97,8 @@ function init() {
   resize();
   window.addEventListener('resize', resize);
 
-  reef = createReef(scene, bounds, CAM_Z);
-  ocean = createOcean(scene, bounds);
+  reef = createReef(scene, bounds, camera, CAM_Z);
+  ocean = createOcean(scene, bounds, null, camera);
   popFX = createPopFX(scene);
 
   // Modelled sea life, if a pack has been dropped in. Asynchronous and entirely
@@ -109,7 +109,7 @@ function init() {
     creatures = lib;
     // Rebuild just the swimmers, now that real models are available.
     scene.remove(ocean.group);
-    ocean = createOcean(scene, bounds, creatures);
+    ocean = createOcean(scene, bounds, creatures, camera);
     // The hero shark needs a real model and returns null without one, in which
     // case there is simply no event - same fail-soft rule as the rest of the
     // pack. Built once; resize does not rebuild it.
@@ -155,7 +155,7 @@ function resize() {
   reefRebuildTimer = setTimeout(() => {
     if (!reef) return;
     reef.dispose();
-    reef = createReef(scene, bounds, CAM_Z);
+    reef = createReef(scene, bounds, camera, CAM_Z);
   }, 320);
 }
 

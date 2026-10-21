@@ -177,10 +177,16 @@ rotates the fan as a whole, so nothing inside needs to move on its own.
 
 ### ⭐ The reef scales with the viewport, and rebuilds on resize
 
-`S = clamp(bounds.x / 22, 0.42, 1.15)` in `createReef`. Scenery sized in absolute
-world units does not survive an aspect change: `bounds.x` runs from ~5 on a
-portrait tablet to ~23 on a classroom panel, so a fan that sits politely in the
-corner of a 16:9 screen sprawls across a phone and cuts through the bubble row.
+Scenery sized in absolute world units does not survive an aspect change:
+`bounds.x` runs from ~5 on a portrait tablet to ~23 on a classroom panel, so a
+fan that sits politely in the corner of a 16:9 screen sprawls across a phone and
+cuts through the bubble row.
+
+Cluster **spread** is now driven by `halfWidthAt()` at each band's own depth (see
+the depth section below), not by `bounds`; `SIDE` survives only as the fallback
+for when no camera is passed. Individual pieces are still sized in world units.
+(An earlier version of this file documented an `S = clamp(bounds.x / 22, …)`
+scale factor — that constant is long gone; `SIDE` replaced it.)
 
 Because `S` is baked at build time, a resize **disposes and rebuilds** the reef,
 debounced by 320ms — a drag-resize fires continuously and rebuilding a few
@@ -383,12 +389,18 @@ vertex colours rather than the material.
 
 Measured from `renderer.info`, not estimated:
 
-| | Before this pass | After |
-| --- | --- | --- |
-| Draw calls (full board) | 543 | **184** |
-| Draw calls (empty board) | — | 145 |
-| Triangles | 50,454 | 51,354 |
-| Geometries | 295 | 106 |
+| | Before the merge pass | After it | Now (full-width reef + shark) |
+| --- | --- | --- | --- |
+| Draw calls (full board) | 543 | **184** | **179** |
+| Triangles | 50,454 | 51,354 | **120,309** |
+| Geometries | 295 | 106 | 216 |
+
+The reef spanning the whole sea bed costs roughly 2.3× the triangles (16
+gardens per cycle instead of 8, plus their litter). **Draw calls did not move**,
+which is the number that mattered — the analysis below found this scene
+draw-call bound, not triangle bound, and each band is still merged into one
+mesh. Density is one constant: "one garden roughly every 26 units" in
+`createReef`. ⚠️ Still unverified on the actual classroom panel.
 
 The reef was drawing a separate mesh per coral segment, kelp blade and anemone
 tentacle. With only ~50k triangles that made it **draw-call bound**, which is the
@@ -499,8 +511,8 @@ Quaternius shark that was already in the pack — what changed is staging:
 | lever | value | why |
 | --- | --- | --- |
 | length | ~39 units | about half the screen width at its lane |
-| crossing | 30 s | under ~18 s it reads as a fast fish, not a big animal |
-| lane | z −35 → −28 | nearer than the deep lane (−50), still well behind the play plane |
+| crossing | 19 s | long enough to feel heavy; longer than this and a body that close stops being an event and becomes an obstruction |
+| lane | z −26 → **+3** | enters deep, exits in FRONT of the play plane |
 | tail beat | `mixer.timeScale = 0.42` | does more for the sense of mass than the scale does |
 | gap | 4–7 min (first at 1–2 min) | rarity is the whole effect |
 
@@ -524,20 +536,42 @@ promise settles about a quarter-second in, with two more seconds of speech still
 to come. A boolean cleared on resolve was measured releasing the gate at frame
 142 of a word that was still playing. `blendUntil` stores the real end instead.
 
-### ⛔ It passes UNDER the bubble row, never through it
+### ⭐ It comes FORWARD, and crosses in front of the bubbles
 
-The first version entered at 0.28–0.52 of the half-height, which is where the
-bubbles are. The band is now −0.20 → −0.42, low enough that the **dorsal fin**
-clears the bubbles too: a dark fin behind a bubble takes contrast away from the
-letter inside it.
+The pass is not a flat sweep across the back of the scene. It enters deep at
+z −26, where the small fish can see it and scatter, and swims **past the play
+plane** to z +3 — in front of the bubbles, the dice and everything else. For
+the second half of the crossing the body is between the viewer and the board.
 
-### ⛔ The off-screen margin is measured at the shark's depth, not the play plane
+⛔ **This deliberately breaks the earlier rule that nothing may occlude a
+letter.** It is allowed to cover the bubbles; that is the effect. Which means
+the idle gate above matters MORE now, not less — a pass may never *start* while
+a child is mid-word. If it ever feels like an interruption, shorten
+`CROSS_SECONDS` or pull `Z_EXIT` back toward 0. Do not weaken the gate.
 
-`bounds.x` is the half-width at z = 0. The shark runs 30 units behind that,
-where the frustum is more than twice as wide — 44 world units against 21.
-Using the play-plane figure left the tail still on screen at the end of the
-crossing, so the shark vanished in open water. `edgeX()` recomputes it from the
-camera every pass, because it also depends on the window's aspect ratio.
+⛔ **The approach has to finish BEFORE mid-screen.** x crosses the centre at
+u ≈ 0.59, so the body must already be forward by then. A cubic ease (u³) was
+tried first: it put the shark in front of the bubbles only for the last 12% of
+the pass, by which point it is leaving frame, so the close-up lasted two
+seconds and happened in the corner. `smooth(0.06, 0.52, u)` is what puts the
+whole second half up close.
+
+⛔ **z = +4 was too close.** At that depth the frame fills with midsection and
+the animal stops being legible as a shark — a grey wall with a fin. +3 is the
+line where the head and foreparts still read while the body still dwarfs the
+board. If you move it, look at a frozen frame at u ≈ 0.46, not at the numbers.
+
+The beat, in order: snout enters at the far edge (u ≈ 0.26) · head and gills
+fill a third of the frame in the foreground (u ≈ 0.46) · body and tail stream
+past · clear of the frame by u ≈ 0.96.
+
+### Freezing a frame to judge it
+
+`__bubblecvc.timeScale = 0` stops the clock. This matters more than it sounds:
+a screenshot taken from a tool call lands **seconds** after the call that asked
+for it, so "capture at u = 0.27" quietly returned u ≈ 0.5 and two art-direction
+decisions were nearly made on the wrong frame. Drive to the progress you want,
+set `timeScale = 0`, then look.
 
 ### The light dips as it goes over
 
@@ -569,6 +603,46 @@ __bubblecvc.scene        // the live scene graph
 Art direction on something that moves cannot be done by reading source. The
 lane, the scale and the counter-shading above were all set by measuring the
 rendered result from the console.
+
+## ⛔ Depth is not a detail: `src/frustum.js`
+
+`bounds` is the half-extent of the **play plane** at z = 0, where the bubbles
+and dice live. Almost nothing else in this scene is at z = 0, and at other
+depths the frustum is a completely different size — 21 units of half-width at
+the play plane is 46 at the nearest reef band and 114 at the farthest.
+
+Using `bounds.x` for anything not at z = 0 has now produced **four** separate
+bugs that looked unrelated:
+
+| symptom | actual cause |
+| --- | --- |
+| fish "blipping in and out of existence" | recycled at x = ±35.5 while the visible edge at their lane was 36–63 |
+| the sea bed empty at left and right | two gardens at ±25 in a picture 92–228 units wide |
+| the hero shark vanishing in open water | exit margin measured at the play plane, 25 units short |
+| the shark popping into frame | same, at the entry end |
+
+The deepest swimmer was the worst: the whale at z −50 was appearing and
+vanishing **27 units inside the frame**, in open water, in plain sight.
+
+`halfWidthAt(camera, z)` / `halfHeightAt(camera, z)` are the fix and the
+prevention. Anything placed, spread or recycled at a depth other than 0 asks
+there. It takes the **camera**, not a cached number, because the answer also
+depends on the window's aspect ratio and therefore changes on every resize.
+
+## The reef spans the whole sea bed
+
+Each travelling band lays its gardens across the frustum **at that band's own
+depth**, one roughly every 26 units, evenly spaced and then jittered by most of
+a slot — regular enough to cover the floor, irregular enough not to read as a
+row of planters. A wide screen gets more reef rather than the same two gardens
+stretched further apart.
+
+Composition is randomised per cluster, with a `rich` value that falls off
+toward the edges of frame: the middle of the sea bed is what the eye reads, the
+sides are a soft frame for it. ⭐ The five-silhouette rule still holds *within*
+a cluster — a solid mass, a horizontal, a vertical rhythm, a fractal and a flat
+net — and hot pink is still rationed to the branching coral, which now appears
+in only some clusters. One focal point per stretch of reef, not a row of them.
 
 ## Not built yet
 

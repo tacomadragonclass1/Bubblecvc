@@ -24,21 +24,32 @@
 
 import * as THREE from '../vendor/three.module.js';
 import { makeUnderwater, waterUniforms } from './lightwater.js';
+import { halfWidthAt } from './frustum.js';
 
-// How long one crossing takes, in seconds. This is the single most important
-// number in the file. Under ~18s it reads as a fast fish; at 30 the snout is on
-// screen for several seconds before the eye understands the scale of the thing.
-const CROSS_SECONDS = 30;
+// How long one crossing takes, in seconds. Shorter than the first version's 30:
+// that was a pass across the BACK of the scene, where slowness is what reads as
+// mass. This one comes forward past the camera and parallax does that job
+// instead - held any longer, a body this close stops being an event and starts
+// being an obstruction in front of the letters.
+const CROSS_SECONDS = 19;
 
 // Multiplier on the loader's normalised 5.6-unit creature length, so the body
 // comes out around 39 units - roughly half the screen width at the hero lane.
 const HERO_SCALE = 7.0;
 
-// Nearer than the deep lane (-50) but still well behind the play plane at z=0,
-// so it can never occlude a die, a bubble or a letter. It closes slightly as it
-// crosses, which reads as a turn toward the glass rather than a slide.
-const Z_ENTER = -35;
-const Z_EXIT  = -28;
+// ⭐ IT COMES FORWARD. Enters deep, where the small fish can see it and scatter,
+// then swims PAST THE PLAY PLANE (z = 0) and crosses the MIDDLE of the screen
+// in FRONT of the bubbles. That approach is the whole "woah": a shape
+// that is merely large at the back of the scene becomes something passing right
+// in front of you, briefly filling the frame.
+//
+// ⛔ This deliberately breaks the earlier rule that nothing may occlude a
+// letter. It is allowed to cover the bubbles - which is exactly why the idle
+// gate in main.js matters MORE now, not less: a pass may never START while a
+// child is mid-word. If it ever feels like an interruption, shorten
+// CROSS_SECONDS or pull Z_EXIT back toward 0. Do not weaken the gate.
+const Z_ENTER = -26;
+const Z_EXIT  = 3;
 
 // Clear margin beyond the visible edge at both ends, ON TOP of half the body
 // length. See edgeX() for why this cannot just be added to bounds.x.
@@ -111,7 +122,6 @@ export function createSharkPass(scene, creatures) {
   if (mixer) mixer.timeScale = 0.42;
 
   holder.visible = false;
-  holder.renderOrder = -5;
   scene.add(holder);
 
   // Half the body along its travel axis, from the loader's normalised length.
@@ -120,9 +130,9 @@ export function createSharkPass(scene, creatures) {
   const bodyHalfLength = 5.6 * HERO_SCALE / 2;
 
   let active = false;
-  let edge = 60;                   // off-screen x, recomputed per frame
+  let camNow = null;               // live camera, for per-depth measurements
   let u = 0;                       // 0..1 progress across the screen
-  let dir = 1, span = 0, y0 = 0, y1 = 0, phase = 0;
+  let dir = 1, xStart = 0, xEnd = 0, y0 = 0, y1 = 0, phase = 0;
   let nextAt = rand(FIRST_MIN, FIRST_MAX);
   let clockT = 0;
   let eclipse = 0;                 // 0..1, how much light it is blocking
@@ -137,18 +147,19 @@ export function createSharkPass(scene, creatures) {
     active = true;
     u = 0;
     dir = Math.random() < 0.5 ? 1 : -1;
-    span = edge * 2;
-    // ⛔ UNDER the bubble row, never through it (and low enough that the DORSAL
-    // FIN clears it too - the fin reaches ~5 units above the body, and a dark
-    // fin showing through a bubble takes contrast away from the letter inside
-    // it). The first version entered at
-    // 0.28-0.52 of the half-height, which is exactly where the bubbles sit, and
-    // a 39-unit body sweeping behind three letters is precisely the distraction
-    // the timing gate exists to prevent - it just arrives spatially instead of
-    // temporally. This band is the open mid-water between the bubbles and the
-    // reef: the body gets a clean run and the letters keep their backdrop.
-    y0 = rand(-bounds.y * 0.20, -bounds.y * 0.04);
-    y1 = rand(-bounds.y * 0.42, -bounds.y * 0.24);
+    // Each end is measured at ITS OWN depth: the frustum is 46 units wide where
+    // it enters and 16 where it leaves, so one figure cannot serve both. The
+    // entry width used at the exit would park the last quarter of the pass
+    // harmlessly off screen; the exit width used at the entry would pop the
+    // snout into frame out of nothing.
+    xStart = -dir * edgeAt(camNow, Z_ENTER);
+    xEnd = dir * edgeAt(camNow, Z_EXIT);
+    // Enters in mid-water and comes up into the bubble row as it closes, so
+    // the nearest part of the pass happens at the height the eye is already
+    // reading. The dorsal fin clears the bubbles at the start; by the end the
+    // body is in front of them, which is the point.
+    y0 = rand(-bounds.y * 0.34, -bounds.y * 0.12);
+    y1 = rand(-bounds.y * 0.16, bounds.y * 0.12);
     phase = Math.random() * Math.PI * 2;
     holder.visible = true;
   }
@@ -178,16 +189,14 @@ export function createSharkPass(scene, creatures) {
    * open water. Measured from the camera every pass, because it also depends
    * on the window's aspect ratio.
    */
-  function edgeX(camera) {
-    const dist = camera.position.z - Z_ENTER;        // the FAR end: widest frustum
-    const halfH = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * dist;
-    return halfH * camera.aspect + bodyHalfLength + LEAD;
+  function edgeAt(camera, z) {
+    return halfWidthAt(camera, z) + bodyHalfLength + LEAD;
   }
 
   function update(t, dt, ctx) {
     clockT = t;
     if (ctx.bounds) bounds = ctx.bounds;
-    edge = edgeX(ctx.camera);
+    camNow = ctx.camera;
     if (!active) {
       if (t >= nextAt && ctx.idle) begin();
       return;
@@ -196,12 +205,28 @@ export function createSharkPass(scene, creatures) {
     u += dt / CROSS_SECONDS;
     if (u >= 1) { end(); return; }
 
-    // Position. x sweeps the full span; z closes slightly; y eases from high to
-    // low with a slow swell on top so it never travels on rails.
-    const x = (-dir) * (span / 2) + dir * span * u;
+    // Position, with a slow swell on top so it never travels on rails.
+    // ⛔ The approach has to be AHEAD of the sweep, not behind it. A cubic (u³)
+    // was tried first and it put the shark in front of the bubbles only in the
+    // last 12% of the pass - by which point it is already leaving frame, so the
+    // close-up lasted barely two seconds and happened in the corner. x crosses
+    // the centre of the screen at u ≈ 0.59, so the body has to BE forward by
+    // then. This holds it deep briefly, brings it past the play plane by
+    // mid-screen, and leaves it close for the whole exit.
     const ease = u * u * (3 - 2 * u);
+    const smooth = (a, b, x) => {
+      const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
+      return k * k * (3 - 2 * k);
+    };
+    // Finishing the approach BEFORE mid-screen (x crosses centre at u ≈ 0.59)
+    // is what makes the whole second half of the pass happen in front of the
+    // bubbles. Finishing it later put the close-up in the corner; finishing it
+    // at z = 4 put the camera so close that the frame filled with midsection
+    // and the animal stopped being legible as a shark.
+    const approach = smooth(0.06, 0.52, u);
+    const x = xStart + (xEnd - xStart) * u;
     const y = y0 + (y1 - y0) * ease + Math.sin(t * 0.22 + phase) * 1.1;
-    holder.position.set(x, y, Z_ENTER + (Z_EXIT - Z_ENTER) * u);
+    holder.position.set(x, y, Z_ENTER + (Z_EXIT - Z_ENTER) * approach);
     holder.rotation.y = dir > 0 ? 0 : Math.PI;
     // Bank into the descent. Tiny: a shark does not roll like an aircraft.
     const bank = Math.sin(t * 0.22 + phase) * 0.05 - 0.04;

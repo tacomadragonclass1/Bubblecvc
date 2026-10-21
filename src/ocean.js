@@ -10,6 +10,7 @@
 // suits a kindergarten room anyway.
 
 import * as THREE from '../vendor/three.module.js';
+import { halfWidthAt } from './frustum.js';
 
 // Depth planes. Creatures are spread across these so the water reads as having
 // volume. All are well BEHIND the play plane (z = 0) so nothing ever occludes a
@@ -318,7 +319,7 @@ function makeMotes(count, spread) {
  * Build the whole backdrop. `bounds` is the visible half-extent of the play
  * plane so creatures can be launched from just outside the screen.
  */
-export function createOcean(scene, bounds, creatures = null) {
+export function createOcean(scene, bounds, creatures = null, camera = null) {
   // `creatures` is the optional glTF library from src/creatures.js. When a kind
   // is present there we use the real model; otherwise we fall back to the
   // procedural builder for that kind specifically - so a pack containing only
@@ -339,11 +340,18 @@ export function createOcean(scene, bounds, creatures = null) {
   const swimmers = [];
   const spawn = (mesh, lane, speed, yJitter) => {
     mesh.position.set(0, 0, lane);
+    // Roughly how long this creature is, for the off-screen margin. The
+    // bounding box of an unposed skinned mesh is an approximation, which is all
+    // a margin needs - it only has to be bigger than the body, not exact.
+    const bb = new THREE.Box3().setFromObject(mesh);
+    const sz = new THREE.Vector3();
+    bb.getSize(sz);
+    mesh.userData.spanX = Math.max(sz.x, sz.z) || 6;
     mesh.userData.speed = speed;
     mesh.userData.lane = lane;
     mesh.userData.yJitter = yJitter;
     mesh.userData.phase = Math.random() * Math.PI * 2;
-    resetSwimmer(mesh, bounds, true);
+    resetSwimmer(mesh, bounds, true, camera);
     group.add(mesh);
     swimmers.push(mesh);
   };
@@ -384,17 +392,26 @@ export function createOcean(scene, bounds, creatures = null) {
   rim.position.set(0.55, 0.35, -0.9);
   scene.add(rim);
 
-  return { group, swimmers, motes, lights: { key, hemi, fill, rim } };
+  return { group, swimmers, motes, camera, lights: { key, hemi, fill, rim } };
 }
 
-function resetSwimmer(m, bounds, anywhere = false) {
+/**
+ * Put a swimmer back at the edge it should enter from.
+ *
+ * ⛔ The edge is measured at the swimmer's OWN LANE, not at the play plane. A
+ * fish at z = −50 is 76 units from the camera where the frustum is 70 units
+ * wide; `bounds.x + 14` put it at 35, which is a third of the way INSIDE the
+ * picture. That is the "fish blipping in and out of existence" bug: they were
+ * not swimming off the screen, they were being teleported in plain sight.
+ */
+function resetSwimmer(m, bounds, anywhere = false, camera = null) {
   // Alternate direction so traffic goes both ways.
   const dir = Math.random() < 0.5 ? 1 : -1;
   m.userData.dir = dir;
-  const margin = 14;
+  const edge = swimmerEdge(m, bounds, camera);
   const x = anywhere
-    ? (Math.random() - 0.5) * bounds.x * 2
-    : (-dir) * (bounds.x + margin);
+    ? (Math.random() - 0.5) * edge * 1.7
+    : (-dir) * edge;
   m.position.x = x;
   m.position.y = (Math.random() - 0.5) * bounds.y * 1.5;
   m.userData.baseY = m.position.y;
@@ -410,6 +427,19 @@ function resetSwimmer(m, bounds, anywhere = false) {
  * rewrites it every frame - anything the shark pushed from outside would be
  * overwritten before it was ever drawn.
  */
+/**
+ * How far out a swimmer must be to be genuinely off screen, measured at its own
+ * depth. Falls back to the old play-plane figure only if no camera was handed
+ * in, so the ocean still runs standalone.
+ */
+function swimmerEdge(m, bounds, camera) {
+  if (!camera) return bounds.x + 14;
+  // Half the model's own length, so a manta does not appear nose-first at the
+  // edge, plus a little clear air.
+  const half = (m.userData.spanX || 6) * 0.5;
+  return halfWidthAt(camera, m.position.z) + half + 3;
+}
+
 export function updateOcean(ocean, bounds, t, dt, threat = null) {
   for (const m of ocean.swimmers) {
     const u = m.userData;
@@ -458,10 +488,12 @@ export function updateOcean(ocean, bounds, t, dt, threat = null) {
       m.rotation.z = Math.sin(t * 0.8 + u.phase) * 0.1;
     }
 
-    const margin = 16;
-    if ((u.dir > 0 && m.position.x > bounds.x + margin) ||
-        (u.dir < 0 && m.position.x < -bounds.x - margin)) {
-      resetSwimmer(m, bounds);
+    // Same edge as the one it entered from, or a fish that swam in from off
+    // screen would vanish before reaching the far side.
+    const edge = swimmerEdge(m, bounds, ocean.camera);
+    if ((u.dir > 0 && m.position.x > edge) ||
+        (u.dir < 0 && m.position.x < -edge)) {
+      resetSwimmer(m, bounds, false, ocean.camera);
     }
   }
 
