@@ -67,7 +67,20 @@ const LEAD = 8;
 // then wait up to seven minutes for the next one. That is exactly what "I hit
 // refresh and I don't see the shark" looked like from the classroom.
 const FIRST_MIN = 45,  FIRST_MAX = 75;
-const GAP_MIN   = 240, GAP_MAX   = 420;
+// ⭐ 4-7 minutes was too rare to survive contact with a real lesson: a class saw
+// it once and never again, because an activity does not last long enough for
+// the second one. "Sparse" has to mean "a treat", not "a rumour". At 1.5-3
+// minutes a ten-minute activity gets three or four passes, which is still few
+// enough that the room reacts every time.
+const GAP_MIN   = 90,  GAP_MAX   = 170;
+
+// ⛔ The idle gate must never be able to STARVE the event. On a busy board -
+// three children flicking dice, words being spoken - "nothing at all is
+// happening" can stay false for a long time, and every pass would slip further
+// behind. After this many seconds of waiting, the only thing still allowed to
+// hold a pass back is a word actually being spoken; a die in flight is a
+// half-second event and is not a reason to withhold a 19-second one.
+const GRACE = 40;
 
 // How far from the body a fish starts getting out of the way.
 const THREAT_RADIUS = 26;
@@ -131,6 +144,14 @@ export function createSharkPass(scene, creatures) {
   if (mixer) mixer.timeScale = 0.42;
 
   holder.visible = false;
+  // ⛔ NEVER let three.js frustum-cull this. Culling tests a SkinnedMesh against
+  // the bounding sphere of its BIND POSE, which here works out at a radius of
+  // 20 world units for a body whose posed half-length is 19.5 - half a unit of
+  // margin on a shape that fills the screen. Any disagreement between those two
+  // numbers shows up as the whole animal blinking out mid-frame. There is
+  // exactly one of these; drawing it unconditionally costs nothing.
+  holder.frustumCulled = false;
+  holder.traverse(o => { o.frustumCulled = false; });
   scene.add(holder);
 
   // Half the body along its travel axis, from the loader's normalised length.
@@ -142,7 +163,9 @@ export function createSharkPass(scene, creatures) {
   let camNow = null;               // live camera, for per-depth measurements
   let u = 0;                       // 0..1 progress across the screen
   let dir = 1, xStart = 0, xEnd = 0, y0 = 0, y1 = 0, phase = 0;
+  let zExit = Z_EXIT;              // jittered per pass, see begin()
   let nextAt = rand(FIRST_MIN, FIRST_MAX);
+  let waitingSince = 0;            // when the pass first became due but blocked
   let clockT = 0;
   let eclipse = 0;                 // 0..1, how much light it is blocking
   let eclipseX = 0.5;              // where on screen, in uv
@@ -154,6 +177,7 @@ export function createSharkPass(scene, creatures) {
 
   function begin() {
     active = true;
+    waitingSince = 0;
     u = 0;
     dir = Math.random() < 0.5 ? 1 : -1;
     // Each end is measured at ITS OWN depth: the frustum is 46 units wide where
@@ -161,8 +185,15 @@ export function createSharkPass(scene, creatures) {
     // entry width used at the exit would park the last quarter of the pass
     // harmlessly off screen; the exit width used at the entry would pop the
     // snout into frame out of nothing.
-    xStart = -dir * edgeAt(camNow, Z_ENTER);
-    xEnd = dir * edgeAt(camNow, Z_EXIT);
+    // A little variation per pass. At one every couple of minutes an identical
+    // move starts to read as a loop; the depth jitter changes how much of the
+    // body fills the frame without ever making it small.
+    zExit = Z_EXIT + rand(-0.8, 1.2);
+    // ⛔ The endpoints are NOT cached here. They are recomputed every frame in
+    // update() from the live camera, because the window can change shape in the
+    // middle of a 19-second pass - fullscreen, a panel's on-screen keyboard, a
+    // rotated tablet - and a pass finishing against stale endpoints ends while
+    // the body is still in view.
     // Enters in mid-water and comes up into the bubble row as it closes, so
     // the nearest part of the pass happens at the height the eye is already
     // reading. The dorsal fin clears the bubbles at the start; by the end the
@@ -175,6 +206,7 @@ export function createSharkPass(scene, creatures) {
 
   function end() {
     active = false;
+    waitingSince = 0;
     holder.visible = false;
     eclipse = 0;
     waterUniforms.uCausticStrength.value = causticBase;
@@ -210,7 +242,16 @@ export function createSharkPass(scene, creatures) {
     if (ctx.bounds) bounds = ctx.bounds;
     camNow = ctx.camera;
     if (!active) {
-      if (ctx.live && t >= nextAt && ctx.idle) begin();
+      if (ctx.live && t >= nextAt) {
+        if (ctx.idle) {
+          begin();
+        } else {
+          if (!waitingSince) waitingSince = t;
+          // Overdue and still blocked: let it go anyway unless a word is
+          // actually being spoken.
+          if (t - waitingSince > GRACE && !ctx.speaking) begin();
+        }
+      }
       return;
     }
     // The lesson ended mid-pass (Home pressed). The scene is behind the
@@ -218,7 +259,6 @@ export function createSharkPass(scene, creatures) {
     if (!ctx.live) { end(); return; }
 
     u += dt / CROSS_SECONDS;
-    if (u >= 1) { end(); return; }
 
     // Position, with a slow swell on top so it never travels on rails.
     // ⛔ The approach has to be AHEAD of the sweep, not behind it. A cubic (u³)
@@ -233,6 +273,10 @@ export function createSharkPass(scene, creatures) {
       const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
       return k * k * (3 - 2 * k);
     };
+    // Measured live, at each end's OWN depth: the frustum is 46 units wide
+    // where it enters and 16 where it leaves, so one figure cannot serve both.
+    xStart = -dir * edgeAt(camNow, Z_ENTER);
+    xEnd = dir * edgeAt(camNow, zExit);
     // Finishing the approach BEFORE mid-screen (x crosses centre at u ≈ 0.59)
     // is what makes the whole second half of the pass happen in front of the
     // bubbles. Finishing it later put the close-up in the corner; finishing it
@@ -241,7 +285,19 @@ export function createSharkPass(scene, creatures) {
     const approach = smooth(0.06, 0.52, u);
     const x = xStart + (xEnd - xStart) * u;
     const y = y0 + (y1 - y0) * ease + Math.sin(t * 0.22 + phase) * 1.1;
-    holder.position.set(x, y, Z_ENTER + (Z_EXIT - Z_ENTER) * approach);
+    holder.position.set(x, y, Z_ENTER + (zExit - Z_ENTER) * approach);
+
+    // ⛔ The pass ends when the body is GENUINELY OFF SCREEN, not when a counter
+    // reaches 1. Milo watched one "flicker and disappear" mid-screen, and every
+    // candidate cause - a stale exit endpoint after a resize, a cull against
+    // the bind-pose sphere, an aspect ratio the margin was not computed for -
+    // has that same signature: the shark vanishing in plain sight. Asking where
+    // the body actually is cannot fail that way. u >= 1.6 is a backstop so a
+    // pass can never run forever.
+    if (u >= 1) {
+      const clear = Math.abs(x) - bodyHalfLength > halfWidthAt(camNow, holder.position.z);
+      if (clear || u >= 1.6) { end(); return; }
+    }
     holder.rotation.y = dir > 0 ? 0 : Math.PI;
     // Bank into the descent. Tiny: a shark does not roll like an aircraft.
     const bank = Math.sin(t * 0.22 + phase) * 0.05 - 0.04;

@@ -433,7 +433,8 @@ function frame() {
   // Before updateOcean: the fish scatter from where the shark IS this frame,
   // not from where it was last one.
   if (shark) {
-    shark.update(t, dt, { live: running, idle: isIdle(), camera, bounds });
+    shark.update(t, dt, { live: running, idle: isIdle(),
+                          speaking: clock.elapsed < blendUntil, camera, bounds });
     const lit = shark.light();
     water.material.uniforms.uEclipse.value = lit.amount;
     water.material.uniforms.uEclipseX.value = lit.x;

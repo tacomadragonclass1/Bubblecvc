@@ -164,6 +164,12 @@ export async function loadCreatures(renderer) {
       holder.userData.mixer = mixer;
     }
 
+    // Same reasoning as the hero shark: these are animated skinned meshes, and
+    // three.js culls them against their BIND POSE bounds. A creature popping
+    // out while still on screen is indistinguishable from the lane-edge bug
+    // that used to make them blink, and this removes the second cause.
+    holder.frustumCulled = false;
+    holder.traverse(o => { o.frustumCulled = false; });
     holder.userData.modelled = true;
     return holder;
   }

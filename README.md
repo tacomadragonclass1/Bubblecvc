@@ -514,7 +514,7 @@ Quaternius shark that was already in the pack — what changed is staging:
 | crossing | 19 s | long enough to feel heavy; longer than this and a body that close stops being an event and becomes an obstruction |
 | lane | z −26 → **+3** | enters deep, exits in FRONT of the play plane |
 | tail beat | `mixer.timeScale = 0.42` | does more for the sense of mass than the scale does |
-| gap | 4–7 min (first 45–75 s **into the lesson**) | rarity is the whole effect |
+| gap | 1.5–3 min (first 45–75 s **into the lesson**) | rare enough to be a treat, often enough that a lesson sees several |
 
 Check any replacement model by its **outline**, not its wireframe. A
 near-silhouette shows nothing but profile, which is why the low poly count costs
@@ -535,6 +535,43 @@ So: `ctx.live` (a session is actually running) gates every pass,
 `shark.reschedule(clock.elapsed)` restarts the countdown when **Start** is
 pressed, and a pass still in flight when **Home** is pressed is dropped rather
 than animated to nobody.
+
+### ⛔ The gate must not be able to STARVE the event
+
+4–7 minutes did not survive contact with a classroom: a class saw the shark
+once and never again, because the activity ended before the second one was due.
+"Sparse" has to mean *a treat*, not *a rumour*. Hence 90–170 s.
+
+The idle gate needs the same discipline. On a busy board — three children
+flicking dice, words being spoken — "nothing at all is happening" can stay false
+for a long stretch, and every pass would slip further behind. After `GRACE`
+(40 s) of waiting, the only thing still allowed to hold a pass back is a word
+actually being spoken. A die in flight is a half-second event and is not a
+reason to withhold a nineteen-second one.
+
+### ⛔ Three ways it could vanish in plain sight, and why none of them remain
+
+Milo watched a pass "flicker, and I could see that it was there, but it
+disappeared". Three separate mechanisms produce exactly that signature, so all
+three are gone rather than one being guessed at:
+
+1. **Frustum culling against the bind pose.** three.js culls a `SkinnedMesh`
+   using the bounding sphere of its *unposed* geometry — here a radius of 20
+   world units for a body whose posed half-length is 19.5. Half a unit of
+   margin on a shape that fills the screen. `frustumCulled = false` on the hero
+   and on every creature (the fish have the same hazard).
+2. **A cached exit point.** The endpoints used to be computed once, at the start
+   of the pass. A window that changes shape during those nineteen seconds —
+   fullscreen, a rotated tablet, a panel's on-screen keyboard — left the pass
+   finishing against stale numbers. They are recomputed every frame from the
+   live camera.
+3. **Ending on a counter.** The pass used to end when `u >= 1`. It now ends when
+   the body is *genuinely off screen*, measured against the live frustum, with
+   `u >= 1.6` only as a backstop. A position test cannot fail this way.
+
+Verified by sampling a whole pass every frame: 274 frames, exactly one
+visibility change (the hide at the end), and zero frames where the body was on
+screen while hidden.
 
 ### ⛔ A pass only ever STARTS when the board is idle
 
