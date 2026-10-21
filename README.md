@@ -514,11 +514,27 @@ Quaternius shark that was already in the pack — what changed is staging:
 | crossing | 19 s | long enough to feel heavy; longer than this and a body that close stops being an event and becomes an obstruction |
 | lane | z −26 → **+3** | enters deep, exits in FRONT of the play plane |
 | tail beat | `mixer.timeScale = 0.42` | does more for the sense of mass than the scale does |
-| gap | 4–7 min (first at 1–2 min) | rarity is the whole effect |
+| gap | 4–7 min (first 45–75 s **into the lesson**) | rarity is the whole effect |
 
 Check any replacement model by its **outline**, not its wireframe. A
 near-silhouette shows nothing but profile, which is why the low poly count costs
 nothing here.
+
+### ⛔ Nothing runs while the prescreen is up, and the clock starts with the LESSON
+
+The prescreen is **opaque** — a solid gradient at `z-index: 60` covering
+`inset: 0` — so the entire 3D scene is hidden behind it. The first version
+counted from page load and let a pass run while the letter picker was open: the
+shark crossed an invisible scene, nobody saw it, and the schedule rolled on to
+the 4–7 minute gap. A teacher who spent a minute choosing letters started the
+lesson having already burned the pass, then waited up to seven minutes for the
+next one. From the classroom that looks exactly like "I hit refresh and there is
+no shark."
+
+So: `ctx.live` (a session is actually running) gates every pass,
+`shark.reschedule(clock.elapsed)` restarts the countdown when **Start** is
+pressed, and a pass still in flight when **Home** is pressed is dropped rather
+than animated to nobody.
 
 ### ⛔ A pass only ever STARTS when the board is idle
 

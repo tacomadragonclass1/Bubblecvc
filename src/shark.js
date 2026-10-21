@@ -55,9 +55,18 @@ const Z_EXIT  = 3;
 // length. See edgeX() for why this cannot just be added to bounds.x.
 const LEAD = 8;
 
-// First pass soon after the session opens, so a lesson actually sees one and
-// the world is established; after that, rare. Values in seconds.
-const FIRST_MIN = 60,  FIRST_MAX = 120;
+// First pass soon after the LESSON starts - not after the page loads. Values in
+// seconds.
+//
+// ⛔ THE PRESCREEN IS OPAQUE. Its background is a solid gradient at z-index 60
+// covering inset: 0, so the whole 3D scene is hidden behind it. The first
+// version counted the page-load clock and let a pass run while the letter
+// picker was up: the shark crossed an invisible scene, nobody saw it, and the
+// schedule then rolled on to the 4-7 minute gap. A teacher who spent a minute
+// choosing letters would start the lesson having already burned the pass, and
+// then wait up to seven minutes for the next one. That is exactly what "I hit
+// refresh and I don't see the shark" looked like from the classroom.
+const FIRST_MIN = 45,  FIRST_MAX = 75;
 const GAP_MIN   = 240, GAP_MAX   = 420;
 
 // How far from the body a fish starts getting out of the way.
@@ -173,6 +182,9 @@ export function createSharkPass(scene, creatures) {
   }
 
   /**
+   * @param ctx.live   a lesson is actually on screen. Nothing runs while the
+   *                   prescreen is up, because the prescreen hides the scene
+   *                   completely - a pass there is a pass nobody sees.
    * @param ctx.idle   board is safe to interrupt (nothing in flight, nothing
    *                   being spoken). A pass only STARTS when this is true; if
    *                   the window arrives mid-word the pass waits rather than
@@ -198,9 +210,12 @@ export function createSharkPass(scene, creatures) {
     if (ctx.bounds) bounds = ctx.bounds;
     camNow = ctx.camera;
     if (!active) {
-      if (t >= nextAt && ctx.idle) begin();
+      if (ctx.live && t >= nextAt && ctx.idle) begin();
       return;
     }
+    // The lesson ended mid-pass (Home pressed). The scene is behind the
+    // prescreen now, so finish quietly rather than animating to nobody.
+    if (!ctx.live) { end(); return; }
 
     u += dt / CROSS_SECONDS;
     if (u >= 1) { end(); return; }
@@ -259,6 +274,16 @@ export function createSharkPass(scene, creatures) {
     get active() { return active; },
     /** Seconds until the next pass - read by the debug handle. */
     get eta() { return active ? 0 : Math.max(0, nextAt - clockT); },
+    /**
+     * Start the clock for a new lesson. Called when a session begins, so the
+     * first shark is a known 45-75s into the LESSON rather than a leftover of
+     * however long someone spent on the letter picker.
+     *
+     * Takes the time explicitly because the models load asynchronously: this
+     * can be called before the pass has ever been updated, when its own clock
+     * is still sitting at zero.
+     */
+    reschedule(now = clockT) { clockT = now; nextAt = now + rand(FIRST_MIN, FIRST_MAX); },
     /** Debug / preview: start one now, ignoring the schedule. */
     now() { if (!active) begin(); },
     dispose() {

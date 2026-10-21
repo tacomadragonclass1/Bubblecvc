@@ -114,6 +114,8 @@ function init() {
     // case there is simply no event - same fail-soft rule as the rest of the
     // pack. Built once; resize does not rebuild it.
     shark = createSharkPass(scene, creatures);
+    // The models can finish loading after a lesson has already started.
+    if (shark && running) shark.reschedule(clock.elapsed);
     console.info('[bubblecvc] modelled creatures loaded:', lib.count, lib.kinds.join(', '));
   });
 
@@ -174,6 +176,11 @@ function startSession(chosen) {
 
   homeBtn.hidden = false;
   replayBtn.hidden = false;
+
+  // Start the shark's clock with the LESSON. Until now it ran from page load,
+  // which meant the first pass could be spent behind the opaque prescreen while
+  // the teacher was still choosing letters.
+  if (shark) shark.reschedule(clock.elapsed);
 }
 
 function endSession() {
@@ -426,7 +433,7 @@ function frame() {
   // Before updateOcean: the fish scatter from where the shark IS this frame,
   // not from where it was last one.
   if (shark) {
-    shark.update(t, dt, { idle: isIdle(), camera, bounds });
+    shark.update(t, dt, { live: running, idle: isIdle(), camera, bounds });
     const lit = shark.light();
     water.material.uniforms.uEclipse.value = lit.amount;
     water.material.uniforms.uEclipseX.value = lit.x;
