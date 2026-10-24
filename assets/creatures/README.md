@@ -10,13 +10,36 @@ procedural creatures in `src/ocean.js` and runs exactly as before.
 (which mirrors the pack as GLB; quaternius.com serves FBX/OBJ/Blend only).
 Every one is a single skinned mesh with one `Swim` clip. 528 KB for the set.
 
+Plus **one CC-BY model**, the octopus — see Attribution below. It is the only
+asset here that is not CC0, because no CC0 octopus of usable quality exists
+(checked 2026-10-24: Quaternius has none in any of its 83 packs, and every
+octopus on Poly Pizza is CC-BY 3.0).
+
 | file | used as | note |
 | --- | --- | --- |
 | `fish-a/b/c.glb` | fish | the three background fish |
 | `manta-ray.glb` | fish | scaled up — it is a big animal |
 | `shark.glb` | **hero** | the periodic hero pass — see `src/shark.js` |
 | `whale.glb` | shark | the deep, slow lane |
-| `dolphin.glb` | octopus | the pack has no octopus; the dolphin takes that lane so no procedural creature is left on screen |
+| `dolphin.glb` | dolphin | the deep lane. Filed under `octopus` until 2026-10-24 — it is a dolphin, and calling it an octopus hid the fact that there was no octopus |
+| `octopus.glb` | reefOctopus | **CC-BY**, see below. The reef dweller in `src/octopus.js` |
+
+## Attribution — REQUIRED for `octopus.glb`
+
+> **Octopus** by **Poly by Google**, licensed **CC-BY 3.0**.
+> Source: https://poly.pizza/m/9F8QJKUT77V
+> Licence: https://creativecommons.org/licenses/by/3.0/
+
+CC-BY requires that credit be given. Keep this entry, and the matching one in
+the repository README, if the model ships. Everything else here is CC0 and
+needs no credit.
+
+**Modified from the original.** The source mesh is static — no animation clips
+at all. It was rigged and animated here with `tools/rig_octopus.py` (Blender):
+a four-bone chain down the body, weights assigned by height, and a 3 s looping
+`Idle` clip in which each bone lags the one above it so a travelling wave runs
+down the arms. Geometry is untouched (3,150 tris); the file grew 150 KB -> 312 KB,
+which is the animation data. CC-BY permits modification provided credit stands.
 
 ## Where to get more
 

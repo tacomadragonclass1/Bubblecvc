@@ -233,9 +233,25 @@ export function createBubbles(scene, layout) {
       rate: 0.58 + Math.random() * 0.34,
       swayRate: 0.41 + Math.random() * 0.28,
       breathRate: 0.33 + Math.random() * 0.22,
-      die: null,        // the die locked inside
+      // ⭐ A LIST, not a single slot. A bubble can only legitimately hold one
+      // die, but it MUST be able to hold more than one, because the thing that
+      // used to happen when it could not was a letter stuck in a bubble
+      // forever. See fillBubble() for the full story.
+      dice: [],
+      // A die that has been accepted and is flying in but has not landed yet.
+      // This is what closes the double-capture window - see canAccept().
+      inbound: null,
       popping: 0,       // >0 while the pop animation runs
       captureR: r * (span === 1 ? 1.22 : 1.7),
+    });
+
+    // `b.die` stays readable everywhere it already was (the word check, the tap
+    // handler, the debug API) but is now DERIVED, so there is exactly one place
+    // the truth lives. Read-only on purpose: an assignment here is what created
+    // the orphaned-die bug, and now it throws instead of silently losing a die.
+    Object.defineProperty(bubbles[bubbles.length - 1], 'die', {
+      get() { return this.dice[0] || null; },
+      enumerable: true,
     });
   });
 
@@ -276,19 +292,28 @@ export function updateBubbles(bubbles, t, dt, reducedMotion = false, fx = null) 
     b.mesh.rotation.y = Math.sin(t * 0.21 + b.phase) * 0.5 * m;
     b.mesh.rotation.z = Math.cos(t * 0.17 + b.phase * 1.4) * 0.22 * m;
 
-    if (b.die) {
-      // ⭐ The bubble acts as a LENS: the die inside reads magnified, as it
-      // would through a curved film. Pure presentation - the capture radius and
-      // the tap target are unchanged, so gameplay is untouched.
-      b.die.position.set(b.mesh.position.x, b.mesh.position.y, 0.1);
+    // ⭐ The bubble acts as a LENS: the die inside reads magnified, as it
+    // would through a curved film. Pure presentation - the capture radius and
+    // the tap target are unchanged, so gameplay is untouched.
+    for (let k = 0; k < b.dice.length; k++) {
+      const die = b.dice[k];
+      // Any die past the first is a letter that should not be in here. Rather
+      // than stack it exactly on top of the first - which is what made the old
+      // bug invisible until a teacher popped the bubble and a letter stayed
+      // behind - fan it off to one side so it is plainly VISIBLE as a second
+      // letter. A glitch a teacher can see and pop is a far smaller problem
+      // than one that silently eats a die.
+      const off = k === 0 ? 0 : b.r * 0.42 * (k % 2 ? 1 : -1) * Math.ceil(k / 2);
+      die.position.set(b.mesh.position.x + off, b.mesh.position.y, 0.1 + k * 0.02);
       // Settle: a quick, slightly over-damped pop to full size as it locks.
-      if (b.settle !== undefined && b.settle < 1) {
-        b.settle = Math.min(1, b.settle + dt * 4.4);
-        const k = b.settle;
-        const over = 1 + Math.sin(k * Math.PI) * 0.09;   // tiny overshoot
-        b.die.scale.setScalar(b.lensScale * (0.55 + 0.45 * k) * over);
+      const u = die.userData;
+      if (u.settle !== undefined && u.settle < 1) {
+        u.settle = Math.min(1, u.settle + dt * 4.4);
+        const e = u.settle;
+        const over = 1 + Math.sin(e * Math.PI) * 0.09;   // tiny overshoot
+        die.scale.setScalar(b.lensScale * (0.55 + 0.45 * e) * over);
       } else {
-        b.die.scale.setScalar(b.lensScale);
+        die.scale.setScalar(b.lensScale);
       }
     }
   }
@@ -315,9 +340,24 @@ const T_REFORM_AT  = T_ANTICIPATE + T_RUPTURE + T_EMPTY;
  * that is whole by the time it gets there.
  */
 export function canAccept(b) {
-  if (b.die) return false;
+  if (b.dice.length) return false;
+  // ⛔ AND NOT ALREADY CLAIMED. `dice` is only filled when the suck-in
+  // animation FINISHES, 0.26s after the bubble agrees to take the die. For that
+  // 0.26s the bubble used to still answer "yes" to everyone, so two letters
+  // flung at the same slot together were both accepted - and the second one to
+  // land overwrote the first, which stayed on screen, locked, referenced by
+  // nothing, and impossible to pop out. `inbound` closes that window.
+  if (b.inbound) return false;
   if (b.popping <= 0) return true;
   return b.popT >= T_REFORM_AT;
+}
+
+/**
+ * Claim a bubble for a die that is on its way in. Called the instant the bubble
+ * agrees to take it, so no second die can be accepted into the same slot.
+ */
+export function reserveBubble(b, die) {
+  b.inbound = die;
 }
 
 /**
@@ -412,17 +452,32 @@ export function resizeBubbles(bubbles, layout) {
     b.captureR = b.r * (b.span === 1 ? 1.22 : 1.7);
     b.mesh.position.copy(b.home);
     b.mesh.scale.set(b.r * (b.span === 1 ? 1 : 1.62), b.r, b.r);
-    // A held die has to be re-fitted to the new bubble size too.
-    if (b.die) {
+    // Every held die has to be re-fitted to the new bubble size too.
+    if (b.dice.length) {
       const want = b.r * 0.86;
       b.lensScale = Math.min(2.2, Math.max(0.42, want / (DIE_SIZE * 0.75)));
-      b.settle = 1;
+      for (const die of b.dice) die.userData.settle = 1;
     }
   });
 }
 
 export function fillBubble(b, die) {
-  b.die = die;
+  // ⭐ PUSH, never overwrite.
+  //
+  // The old line here was `b.die = die`, and that single assignment was the
+  // whole bug a week of classroom use turned up: fling two letters at one
+  // bubble and the second one to land replaced the first. The replaced die was
+  // left in state 'captured' - no case in the main loop's switch, so never
+  // updated - sitting inside the film at full lens scale, with nothing holding
+  // a reference to it. popBubble() returned only `b.die`, so popping freed the
+  // newcomer and the original stayed in there for the rest of the session.
+  //
+  // canAccept() now makes a double arrival essentially impossible, but this
+  // stays a list anyway: entry is guarded by timing, and timing is exactly the
+  // kind of guard that a future change quietly breaks. A list cannot lose a
+  // die even if something does get through.
+  if (!b.dice.includes(die)) b.dice.push(die);
+  if (b.inbound === die) b.inbound = null;
   b.mat.uniforms.uFill.value = 1;
   die.userData.state = 'captured';
   die.userData.slot = b.index;
@@ -436,21 +491,39 @@ export function fillBubble(b, die) {
   // go under 1.0 left the die sticking out through the membrane.
   const want = b.r * 0.86;
   b.lensScale = Math.min(2.2, Math.max(0.42, want / (DIE_SIZE * 0.75)));
-  b.settle = 0.001;                              // drives the settle pop-in
+  // Per-DIE, so a second die settles on its own clock instead of resetting the
+  // first one's animation.
+  die.userData.settle = 0.001;                   // drives the settle pop-in
 }
 
-/** Start the pop. Returns the die that was inside, so the caller can send it home. */
+/**
+ * Start the pop.
+ *
+ * ⭐ RELEASES EVERYTHING THE BUBBLE IS HOLDING, and returns all of it. Popping
+ * is the one gesture that is guaranteed to empty a bubble - whatever is in
+ * there comes out, however it got in. That rule came out of a week of classroom
+ * use, and it is the reason a stuck letter can no longer survive a pop even if
+ * some future change lets two in again.
+ *
+ * Returns an ARRAY (normally of length 1). Callers send every die home.
+ */
 export function popBubble(b) {
-  const die = b.die;
-  b.die = null;
-  b.settle = undefined;
-  // Undo the lens magnification before the die flies home, or it would return
-  // to the bay at twice the size of its neighbours.
-  if (die) die.scale.setScalar(1);
+  const released = b.dice.slice();
+  b.dice.length = 0;
+  // An inbound die is NOT released - it has not arrived, and it is still
+  // mid-flight under its own animation. Dropping the claim is enough: the
+  // bubble will be reforming by the time it lands, and canAccept() allows that.
+  b.inbound = null;
+  for (const die of released) {
+    // Undo the lens magnification before the die flies home, or it would return
+    // to the bay at twice the size of its neighbours.
+    die.scale.setScalar(1);
+    die.userData.settle = undefined;
+  }
   b.popping = 1;
   b.popT = 0;
   b.burstFired = false;
-  return die;
+  return released;
 }
 
 /** Which bubble, if any, is close enough to swallow a die at `p`. */

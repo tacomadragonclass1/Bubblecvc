@@ -13,8 +13,14 @@
 // that way, but anything the eye recognises as an ANIMAL does not - failed
 // realism looks worse than honest abstraction. Rocks and kelp stay procedural.
 //
-// Sourcing: CC0 only, so the pack can ship inside a public classroom repo with
-// no attribution burden. Quaternius' animated fish pack is the reference.
+// Sourcing: CC0 wherever possible, so most of the pack ships inside this public
+// classroom repo with no attribution burden. Quaternius' animated fish pack is
+// the reference. ⚠️ ONE EXCEPTION as of 2026-10-24: `octopus.glb` is CC-BY 3.0,
+// because no CC0 octopus of usable quality exists - Quaternius has none in any
+// of its 83 packs and every octopus on Poly Pizza is CC-BY. CC-BY is fine here
+// provided the credit stands: see the Attribution section of
+// assets/creatures/README.md and the repository README. If you add assets,
+// prefer CC0 and only reach for CC-BY when there is genuinely no alternative.
 
 import * as THREE from '../vendor/three.module.js';
 import { GLTFLoader } from '../vendor/jsm/GLTFLoader.js';

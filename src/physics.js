@@ -14,7 +14,7 @@
 //     delightful thing in the game and it must not be designed away.
 
 import * as THREE from '../vendor/three.module.js';
-import { canAccept } from './bubbles.js';
+import { canAccept, reserveBubble } from './bubbles.js';
 
 export const GRAVITY = -17.0;
 const DRAG = 0.42;            // per second, velocity-proportional
@@ -138,6 +138,13 @@ export function stepReturn(die, dt) {
 /** Suck-in animation once a bubble has claimed a die. */
 export function startCapture(die, bubble) {
   const u = die.userData;
+  // ⭐ Claim the bubble HERE, at the instant the die commits to it - not when
+  // the suck-in finishes 0.26s later. Doing it at the end left a window in
+  // which the bubble still accepted a second die, and the second one to arrive
+  // displaced the first into a permanently stuck state. Reserving at the point
+  // of commitment is what makes that window zero-width, and it lives inside
+  // startCapture so no call site can forget to do it.
+  reserveBubble(bubble, die);
   u.state = 'capturing';
   u.capT = 0;
   u.capFrom = die.position.clone();

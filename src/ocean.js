@@ -236,56 +236,6 @@ function makeShark(scale = 1) {
   return g;
 }
 
-function makeOctopus(scale = 1) {
-  const g = new THREE.Group();
-  const mat = fishMaterial(0.88, 0.45, 0.55);
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(1.1, 16, 14), mat);
-  head.scale.set(1, 1.2, 1);
-  g.add(head);
-
-  const arms = [];
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2;
-    // Each arm is a short chain of tapering segments so it can curl.
-    const arm = new THREE.Group();
-    let parent = arm;
-    for (let s = 0; s < 4; s++) {
-      const r = 0.22 * (1 - s * 0.19);
-      const seg = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.8, r, 0.55, 7), mat);
-      seg.position.y = -0.55;
-      seg.geometry.translate(0, -0.275, 0);
-      seg.position.y = s === 0 ? -0.9 : -0.5;
-      parent.add(seg);
-      parent = seg;
-    }
-    arm.position.set(Math.cos(a) * 0.55, -0.5, Math.sin(a) * 0.55);
-    arm.userData.phase = i * 0.7;
-    arms.push(arm);
-    g.add(arm);
-  }
-
-  for (const s of [1, -1]) {
-    const eye = new THREE.Mesh(
-      new THREE.SphereGeometry(0.2, 10, 10),
-      new THREE.MeshStandardMaterial({ color: 0xfdfdff, roughness: 0.25 })
-    );
-    eye.position.set(s * 0.42, 0.42, 0.92);
-    g.add(eye);
-    const pupil = new THREE.Mesh(
-      new THREE.SphereGeometry(0.1, 8, 8),
-      new THREE.MeshStandardMaterial({ color: 0x14141c })
-    );
-    pupil.position.set(s * 0.44, 0.4, 1.07);
-    g.add(pupil);
-  }
-
-  g.scale.setScalar(scale);
-  g.userData.arms = arms;
-  g.userData.kind = 'octopus';
-  return g;
-}
-
 // ------------------------------------------------------------- drifting motes
 // Rising specks and far-off bubbles. Cheap, and they do most of the work of
 // making the water feel like water.
@@ -327,9 +277,13 @@ export function createOcean(scene, bounds, creatures = null, camera = null) {
   const build = (kind, scale, hue) => {
     const modelled = creatures && creatures.make(kind, scale);
     if (modelled) { modelled.userData.kind = kind; return modelled; }
-    if (kind === 'fish') return makeFish(scale, hue);
     if (kind === 'shark') return makeShark(scale);
-    return makeOctopus(scale);
+    // ⛔ The fallback for anything else is a FISH, not an octopus. It used to be
+    // makeOctopus(), which is how a procedural octopus could end up swimming a
+    // lane - and the reef octopus (src/octopus.js) is the only octopus in this
+    // app now. A missing model should degrade to generic background life, not
+    // to a second creature pretending to be a specific animal.
+    return makeFish(scale, hue === undefined ? 0.1 : hue);
   };
   const group = new THREE.Group();
   scene.add(group);
@@ -363,7 +317,11 @@ export function createOcean(scene, bounds, creatures = null, camera = null) {
   spawn(build('fish', 0.62, 0.14), LANES[1], 2.7, 1.5);
   spawn(build('fish', 0.90, 0.55), LANES[2], 2.2, 0.9);
   spawn(build('fish', 0.55, 0.02), LANES[1], 3.9, 1.8);
-  spawn(build('octopus', 0.85), LANES[3], 1.2, 0.5);
+  // ⛔ A DOLPHIN, and now called one. This was `build('octopus', ...)` mapped in
+  // the manifest to dolphin.glb, because the fish pack had no octopus - so the
+  // code, the manifest and the screen all disagreed about what this animal was.
+  // The reef octopus in src/octopus.js is the real one; this lane is a dolphin.
+  spawn(build('dolphin', 0.85), LANES[3], 1.2, 0.5);
   // The deep lane is the WHALE (see manifest.json): slow, far, permanent
   // traffic. The shark was pulled out of the routine cast entirely - it is an
   // event now, in src/shark.js, and a small one cruising here all day would
@@ -480,12 +438,6 @@ export function updateOcean(ocean, bounds, t, dt, threat = null) {
     } else if (u.kind === 'fish' || u.kind === 'shark') {
       const beat = u.kind === 'shark' ? 2.2 : 5.5;
       u.tail.rotation.y = Math.sin(t * beat + u.phase) * 0.45;
-    } else if (u.kind === 'octopus') {
-      for (const arm of u.arms) {
-        arm.rotation.x = Math.sin(t * 1.6 + arm.userData.phase) * 0.3;
-        arm.rotation.z = Math.cos(t * 1.3 + arm.userData.phase) * 0.25;
-      }
-      m.rotation.z = Math.sin(t * 0.8 + u.phase) * 0.1;
     }
 
     // Same edge as the one it entered from, or a fish that swam in from off

@@ -16,7 +16,7 @@
 
 import * as THREE from '../vendor/three.module.js';
 import { createOcean, updateOcean, makeWater } from './ocean.js';
-import { createReef, updateReef } from './reef.js';
+import { createReef, updateReef, loadCoral } from './reef.js';
 import { createBubbles, updateBubbles, fillBubble, popBubble, bubbleHit, layoutFor, resizeBubbles, disposeBubbles } from './bubbles.js';
 import { createDie, applyWobble, layoutBay, DIE_SIZE, disposeDie } from './dice.js';
 import * as P from './physics.js';
@@ -25,13 +25,14 @@ import { createPrescreen } from './prescreen.js';
 import { createPopFX } from './pop.js';
 import { loadCreatures } from './creatures.js';
 import { createSharkPass } from './shark.js';
+import { createReefOctopus } from './octopus.js';
 import { updateWater } from './lightwater.js';
 
 const FOV = 45;
 const CAM_Z = 26;
 
 let renderer, scene, camera, waterScene, waterCam, water;
-let ocean, reef, bubbleSet, bubbles, popFX, creatures = null, shark = null;
+let ocean, reef, bubbleSet, bubbles, popFX, creatures = null, shark = null, octopus = null;
 let bounds = { x: 19, y: 10.8 };
 let bayTop = -4.6;
 let dice = [];                 // every die currently in the bay or in motion
@@ -68,7 +69,12 @@ const SLOTS = 3;
 //
 // Kept as a set because the obvious next request is a second word. Lower case,
 // and only words the board can actually spell with three dice.
-const SUMMON_WORDS = new Set(['big']);
+//
+// `fin` joined `big` after a week in the classroom. Both need letters that are
+// NOT in the prescreen default (b/i/g and f/i/n all have to be chosen), so
+// neither fires by accident during an unrelated drill - which is what keeps the
+// surprise worth having.
+const SUMMON_WORDS = new Set(['big', 'fin']);
 
 // Respected throughout the idle animations and the pop. Motion is reduced, never
 // removed: the bubbles still have to read as suspended in water.
@@ -111,6 +117,21 @@ function init() {
   ocean = createOcean(scene, bounds, null, camera);
   popFX = createPopFX(scene);
 
+  // Modelled coral, if the asset is there. Same fail-soft rule as the creature
+  // pack: the reef is already on screen with its procedural coral by the time
+  // this resolves, and a missing file just leaves it that way.
+  //
+  // ⛔ The reef has to be REBUILT, not patched. Each band is merged into a
+  // handful of meshes at construction time, so there is no longer any such
+  // thing as "the brain coral in band 2" to swap out - the only way to use the
+  // models is to build the bands again with them.
+  loadCoral().then(set => {
+    if (!set) return;
+    reef.dispose();
+    reef = createReef(scene, bounds, camera, CAM_Z);
+    console.info('[bubblecvc] modelled coral loaded:', Object.keys(set).join(', '));
+  });
+
   // Modelled sea life, if a pack has been dropped in. Asynchronous and entirely
   // optional: the scene is already running with procedural creatures by the time
   // this resolves, and if it finds nothing it simply leaves them alone.
@@ -124,6 +145,9 @@ function init() {
     // case there is simply no event - same fail-soft rule as the rest of the
     // pack. Built once; resize does not rebuild it.
     shark = createSharkPass(scene, creatures);
+    // ⛔ Handed a GETTER, not `reef`. A resize disposes and rebuilds the reef,
+    // and a stored reference would leave the octopus parented to a dead band.
+    octopus = createReefOctopus(scene, creatures, () => reef);
     // The models can finish loading after a lesson has already started.
     if (shark && running) shark.reschedule(clock.elapsed);
     console.info('[bubblecvc] modelled creatures loaded:', lib.count, lib.kinds.join(', '));
@@ -317,9 +341,10 @@ function wirePointer(canvas) {
     // anything behind it, and clearing a slot is the chain move.
     const hit = bubbleHit(bubbles, p);
     if (hit && hit.die) {
-      const die = popBubble(hit);
+      // Popping releases EVERYTHING in the bubble - normally one die, but if a
+      // second ever got in there it comes out too rather than being stranded.
+      for (const die of popBubble(hit)) P.sendHome(die);
       A.sfxPop();
-      P.sendHome(die);
       lastSpoken = '';
       return;
     }
@@ -455,6 +480,10 @@ function frame() {
   }
   updateOcean(ocean, bounds, t, dt, shark ? shark.threat() : null);
   updateReef(reef, t, reducedMotion, dt);
+  // After updateReef: the octopus watches for a band WRAPPING to decide whether
+  // to appear, and that only happens inside updateReef. Running before it would
+  // see every wrap a frame late.
+  if (octopus) octopus.update(t, dt, { reducedMotion });
   if (popFX) popFX.update(dt);
   if (creatures) creatures.update(dt);
 
@@ -558,7 +587,7 @@ window.__bubblecvc = {
   setPopPhase(i, phase) {
     const b = bubbles && bubbles[i];
     if (!b) return 'no bubble ' + i;
-    if (b.die) { const d = popBubble(b); P.sendHome(d); }
+    for (const d of popBubble(b)) P.sendHome(d);
     b.popping = 1;
     b.popT = phase;
     b.burstFired = false;          // so the ring and droplets still spawn
@@ -571,12 +600,20 @@ window.__bubblecvc = {
   popSlot(i) {
     const b = bubbles && bubbles[i];
     if (!b || !b.die) return 'slot ' + i + ' is empty';
-    const die = popBubble(b);
-    P.sendHome(die);
+    const freed = popBubble(b);
+    for (const die of freed) P.sendHome(die);
     lastSpoken = '';
-    return 'popped ' + i;
+    return 'popped ' + i + ' (released ' + freed.length + ')';
   },
   get bayTop() { return bayTop; },
+  /**
+   * The reef octopus. `octoState` is null while it is away between passes -
+   * that is the normal resting condition, not a fault. `octoShow()` drops it
+   * onto the furthest band immediately so it can be inspected without waiting
+   * for a wrap (a full band cycle is ~57s).
+   */
+  get octoState() { return octopus ? octopus.state : null; },
+  octoShow() { return octopus ? octopus.debugShow() : 'no octopus'; },
   /** Launch a die by letter, in world units per second - bypasses the gesture. */
   throwDie(ch, vx, vy, col = null) {
     // `col` disambiguates a letter that appears in more than one column - `t`
