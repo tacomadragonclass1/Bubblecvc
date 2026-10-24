@@ -589,7 +589,7 @@ reason to withhold a nineteen-second one.
 
 ### ⛔ Three ways it could vanish in plain sight, and why none of them remain
 
-Milo watched a pass "flicker, and I could see that it was there, but it
+A pass was reported to "flicker, and I could see that it was there, but it
 disappeared". Three separate mechanisms produce exactly that signature, so all
 three are gone rather than one being guessed at:
 

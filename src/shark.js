@@ -288,7 +288,7 @@ export function createSharkPass(scene, creatures) {
     holder.position.set(x, y, Z_ENTER + (zExit - Z_ENTER) * approach);
 
     // ⛔ The pass ends when the body is GENUINELY OFF SCREEN, not when a counter
-    // reaches 1. Milo watched one "flicker and disappear" mid-screen, and every
+    // reaches 1. A pass was seen to "flicker and disappear" mid-screen, and every
     // candidate cause - a stale exit endpoint after a resize, a cull against
     // the bind-pose sphere, an aspect ratio the margin was not computed for -
     // has that same signature: the shark vanishing in plain sight. Asking where
