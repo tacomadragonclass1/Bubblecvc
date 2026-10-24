@@ -126,7 +126,13 @@ export function makeUnderwater(material, { caustics = 1.0, fog = 1.0 } = {}) {
           float d = length(vLwWorld - cameraPosition);
           float fogT = smoothstep(70.0, 150.0, d) * uFogAmount;
           vec3 deepTint = vec3(0.010, 0.062, 0.135);
-          gl_FragColor.rgb = mix(gl_FragColor.rgb, deepTint, fogT * 0.82);
+          // ⛔ THE FOG HAS TO ACTUALLY FINISH. At 0.82 the farthest reef was
+          // still 18% its own colour, so a band recycled to the back did not
+          // emerge from the murk - it appeared. The last stretch of distance is
+          // exactly where a travelling reef needs to be indistinguishable from
+          // open water. This mostly moves the FAR end: fogT is near zero in the
+          // mid distance, so the multiplier barely touches it there.
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, deepTint, fogT * 0.94);
         }
         #include <tonemapping_fragment>`);
   };

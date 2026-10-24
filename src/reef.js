@@ -103,8 +103,14 @@ function mergeGeometries(list) {
 const PALETTE = {
   coralPink:  0xff7a92,   // THE accent - branching coral only
   coralDeep:  0xcf5f74,   // sea fan, a half-step down
-  brain:      0xc98f7a,   // muted terracotta
-  table:      0xb8a06a,   // dull ochre
+  // ⛔ THESE TWO ARE DELIBERATELY DARK, and resist the urge to "warm them up".
+  // They are the big horizontal surfaces on the sea bed, so they catch the most
+  // caustic light and carry the most area - at 0xc98f7a / 0xb8a06a they read as
+  // pale cream in the app and became the brightest value in the frame, brighter
+  // than the letters. Hot pink is supposed to be the one accent; a bright floor
+  // steals that job.
+  brain:      0xb07d68,   // terracotta, kept below the letters in value
+  table:      0xa08a5e,   // ochre, ditto
   pipes:      0x9f8fb8,   // dusty mauve
   anemoneBase:0xd4737f,
   amber:      0xffa94f,
@@ -144,7 +150,27 @@ let CORAL_GEO = null;
 // falloff and the five-silhouette balance in buildCluster() are all tuned
 // against the OLD primitive sizes, and flattening these re-tunes the whole reef
 // by accident.
-const CORAL_H = { branch: 2.2, brain: 1.15, table: 1.35, pipes: 1.3, fan: 1.9 };
+//
+// ⛔ AND THEY MUST BE JUDGED AT THE GAME CAMERA, NOT UP CLOSE. The first set
+// (branch 2.2, brain 1.15, table 1.35, pipes 1.3, fan 1.9) made coral that
+// looked far better than the primitives in a close-up and was LESS visible than
+// them in the actual app: merged band meshes averaged 3.8 units tall against
+// the procedural 4.4. The camera sits at z=26 looking straight down -Z and
+// never tilts, so the sea bed is a strip across the bottom of frame - a piece
+// that is wide and low simply is not there. Height is what buys presence.
+const CORAL_H = { branch: 3.0, brain: 1.3, table: 1.5, pipes: 1.9, fan: 2.0 };
+// ⭐ NOT ONE SCALE FACTOR APPLIED TO FIVE SHAPES. Height buys presence, but it
+// also buys BRIGHTNESS when the shape is a big pale horizontal surface - and
+// brightness next to the letters is what the art direction cannot afford. So
+// the upright, saturated species (branch, pipes) stay tall, and the flat pale
+// ones (brain, table) are pulled back hard: at table 2.0 the cream discs became
+// the lightest thing on screen and the eye went to them instead of to the dice.
+// ⛔ The fan is deliberately the SMALLEST multiplier of the five. It is a wide,
+// high-contrast lattice, so it reads from much further away than a solid lump
+// does - at 3.0 the fans measured 15.7 units and became the thing you looked
+// at, which inverts the art direction: the hot-pink BRANCHING coral is the
+// cluster's one accent and focal point, and the fan is a supporting silhouette.
+// Legibility per unit of height is not the same across these five shapes.
 
 /**
  * Fetch the coral once, before the reef is built. Returns null on any failure,
@@ -197,7 +223,28 @@ export async function loadCoral() {
 function coralPiece(kind, scale, color, opts = {}) {
   const geo = CORAL_GEO && CORAL_GEO[kind];
   if (!geo) return null;
-  const m = new THREE.Mesh(geo, mat(color, opts));
+  const material = mat(color, opts);
+  // ⭐ CORAL GETS LESS CAUSTIC LIGHT THAN THE ROCKS, and this is the third leg
+  // of keeping the sea bed quiet (the other two are value and height above).
+  // Caustics are a multiplier on a surface, so the bigger and paler the surface
+  // the more they shout - on the broad table and brain forms the bright white
+  // squiggles were pulling the eye down off the letters. 0.5 keeps the water
+  // reading as water without turning the coral into the brightest thing on
+  // screen.
+  //
+  // ⛔ Applied HERE, before the merge, on purpose. The per-band loop later calls
+  // makeUnderwater(m, {caustics: 1.0}) on everything it finds, and that function
+  // no-ops on a material it has already touched - so claiming the material now
+  // is what makes the lower value stick. bakeReefShading clones the material
+  // after the merge, and a clone carries the flag with it.
+  // ⛔ 0.85, not 0.5. Cutting the caustics right back DID quiet the pale
+  // species - and it also removed the broken white light that was varying the
+  // pink ones, so the hot-pink branching coral went flat and became the only
+  // thing in the frame. Caustics are doing two jobs here, and only one of them
+  // was the problem. A small reduction calms the big pale surfaces without
+  // un-tying the coral from the water it is sitting in.
+  makeUnderwater(material, { caustics: 0.85, fog: 1.0 });
+  const m = new THREE.Mesh(geo, material);
   m.scale.setScalar(scale * CORAL_H[kind]);
   m.rotation.y = Math.random() * Math.PI * 2;
   // ⛔ The sway loop in updateReef() reads `phase` off the fan and the anemone.
@@ -264,6 +311,7 @@ const kelpVert = /* glsl */`
   varying vec2 vUv;
   varying float vShade;
   varying vec3 vNormalW;
+  varying vec3 vKelpWorld;
   void main() {
     vUv = uv;
     vec3 p = position;
@@ -277,6 +325,9 @@ const kelpVert = /* glsl */`
     // A little self-shading toward the tip so the strand is not flat.
     vShade = 0.72 + 0.28 * h;
     vNormalW = normalize(mat3(modelMatrix) * normal);
+    // World position, purely so the fragment shader can measure its distance
+    // from the camera and apply the same depth fog as everything else.
+    vKelpWorld = (modelMatrix * vec4(p, 1.0)).xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }
 `;
@@ -288,6 +339,7 @@ const kelpFrag = /* glsl */`
   varying vec2 vUv;
   varying float vShade;
   varying vec3 vNormalW;
+  varying vec3 vKelpWorld;
   void main() {
     // A paler spine down the middle of the blade reads as a leaf vein and keeps
     // the ribbon from looking like a flat rectangle.
@@ -306,6 +358,22 @@ const kelpFrag = /* glsl */`
     // Thinner, brighter toward the tip where the blade is youngest.
     c += uColor * pow(vUv.y, 3.0) * 0.35;
 
+    // ⛔⛔ THE KELP MUST FOG LIKE EVERYTHING ELSE.
+    //
+    // This shader is bespoke, so the loop in createReef() that applies
+    // makeUnderwater() to the swaying pieces skips it - it tests
+    // isMeshStandardMaterial, and this is a ShaderMaterial. The consequence was
+    // that kelp had NO depth fog at all: a strand recycled to the back of the
+    // reef rendered at full saturation while every rock and coral around it was
+    // 94% faded into the water. That is the "appears out of nowhere" effect,
+    // and it is also why the kelp read as the most saturated thing on screen.
+    //
+    // These three lines are copied from lightwater.js on purpose and must stay
+    // in step with it: same smoothstep range, same deepTint, same 0.94.
+    float kd = length(vKelpWorld - cameraPosition);
+    float kFog = smoothstep(70.0, 150.0, kd);
+    vec3 kDeep = vec3(0.010, 0.062, 0.135);
+    c = mix(c, kDeep, kFog * 0.94);
     gl_FragColor = vec4(c, 1.0);
   }
 `;
@@ -698,10 +766,27 @@ function makeDistantReef(width) {
 // Geometry: a cluster sits at y = -22, which at the far end is low in frame and
 // by z ~ -27 has dropped below the bottom edge - so bands leave the shot on
 // their own and never need fading. Nothing ever reaches the play plane.
-export const Z_BACK = -112;       // where a band is (re)spawned
+// ⭐ Z_BACK IS SET BY THE FOG, NOT BY TASTE.
+//
+// A band is recycled to Z_BACK the instant it passes Z_FRONT, so whatever is
+// visible at Z_BACK does not fade in - it APPEARS, all at once, with nothing
+// behind it. At the old -112 that was 138 units from the camera, where the
+// depth fog had only reached 77% of the way to the water colour, so a whole
+// garden popped into being at roughly a quarter strength and killed the
+// illusion of swimming over a reef.
+//
+// -135 is 161 units out, past where the fog saturates (see lightwater.js:
+// smoothstep(70, 150, d)), so a band spawns effectively invisible and emerges.
+// ⛔ Do not push this much further: the camera's far plane is 200 and sits at
+// z = +26, so anything beyond z = -174 is clipped away entirely.
+export const Z_BACK = -135;       // where a band is (re)spawned - fog-determined
 export const Z_FRONT = -30;       // recycle once past this - still far behind z = 0
 export const SPAN = Z_FRONT - Z_BACK;
-const BANDS = 4;
+// ⛔ BANDS went 4 -> 5 WITH that change, and the two must move together. The
+// spacing between gardens is SPAN/BANDS; stretching the span without adding a
+// band would have opened it from 20.5 to 26 units and left visible stripes of
+// bare sea floor between the gardens.
+const BANDS = 5;
 export const TRAVEL = 1.45;       // world units per second
 
 // ⛔ THE FLOOR IS LOW FOR A REASON. A cluster is ~15 world units tall, and the

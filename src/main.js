@@ -23,6 +23,7 @@ import * as P from './physics.js';
 import * as A from './audio.js';
 import { createPrescreen } from './prescreen.js';
 import { createPopFX } from './pop.js';
+import { createInk } from './ink.js';
 import { loadCreatures } from './creatures.js';
 import { createSharkPass } from './shark.js';
 import { createReefOctopus } from './octopus.js';
@@ -32,7 +33,8 @@ const FOV = 45;
 const CAM_Z = 26;
 
 let renderer, scene, camera, waterScene, waterCam, water;
-let ocean, reef, bubbleSet, bubbles, popFX, creatures = null, shark = null, octopus = null;
+let ocean, reef, bubbleSet, bubbles, popFX, ink = null, creatures = null, shark = null, octopus = null;
+let sharkWasActive = false;   // edge-detect for the octopus's predator reaction
 let bounds = { x: 19, y: 10.8 };
 let bayTop = -4.6;
 let dice = [];                 // every die currently in the bay or in motion
@@ -116,6 +118,7 @@ function init() {
   reef = createReef(scene, bounds, camera, CAM_Z);
   ocean = createOcean(scene, bounds, null, camera);
   popFX = createPopFX(scene);
+  ink = createInk(scene);
 
   // Modelled coral, if the asset is there. Same fail-soft rule as the creature
   // pack: the reef is already on screen with its procedural coral by the time
@@ -219,6 +222,9 @@ function startSession(chosen) {
 
 function endSession() {
   running = false;
+  // ⛔ Send him home before the board is torn down, or he is left parked under
+  // a bubble row that no longer exists for the whole of the pre-screen.
+  if (octopus) octopus.release();
   // A classroom session goes setup -> play -> setup many times in one lesson, so
   // the per-session materials have to be released or the GPU slowly fills up.
   for (const d of dice) { scene.remove(d); disposeDie(d); }
@@ -346,6 +352,7 @@ function wirePointer(canvas) {
       for (const die of popBubble(hit)) P.sendHome(die);
       A.sfxPop();
       lastSpoken = '';
+      syncOctopus();
       return;
     }
 
@@ -409,6 +416,35 @@ function currentWord() {
  *   all three               -> sounds, then the whole word
  * Guarded by lastSpoken so re-entering the same state does not re-trigger.
  */
+/**
+ * ⭐ THE O ROUTINE. An octopus starts with O, so when one lands in the vowel
+ * bubble he comes out of the reef to look at it.
+ *
+ * Driven off the BOARD STATE rather than off the capture event, and that is
+ * deliberate: this is called after every change to the slots - a capture, a
+ * pop, a session reset - so the octopus can never be left admiring a letter
+ * that is no longer there. An event-driven version needs a matching "undo" at
+ * every single place a slot can empty, and missing one strands him on screen
+ * for the rest of the lesson.
+ */
+function syncOctopus() {
+  if (!octopus) return;
+  const vowel = currentWord().raw[1];
+  // ⛔ THE O BEING THERE IS THE WHOLE CONDITION. He comes while it is in the
+  // bubble and goes back when it leaves - which in practice means when the
+  // bubble is popped.
+  //
+  // An earlier version also sent him home the moment the WORD was complete,
+  // and that was wrong twice over: he vanished at exactly the moment the child
+  // had finished building something and was looking at it, and it made the
+  // rule two conditions instead of one. One condition is also what makes this
+  // safe to call after every single board change.
+  // The shark gate lives in the octopus itself (admire() refuses while a pass
+  // is on), so this stays the single simple rule it was.
+  if (vowel === 'o') octopus.admire();
+  else octopus.release();
+}
+
 function speakIfReady() {
   const { raw } = currentWord();
   const [onset, vowel, coda] = raw;
@@ -480,12 +516,32 @@ function frame() {
   }
   updateOcean(ocean, bounds, t, dt, shark ? shark.threat() : null);
   updateReef(reef, t, reducedMotion, dt);
+  // ⛔ BEFORE octopus.update(), not after. This advances every AnimationMixer,
+  // which writes bone rotations - and the octopus POSES ITS OWN BONES while it
+  // is dashing (arms streamed back). With the mixer running afterwards it
+  // simply overwrote that pose every frame and the dash had no arms in it.
+  if (creatures) creatures.update(dt);
   // After updateReef: the octopus watches for a band WRAPPING to decide whether
   // to appear, and that only happens inside updateReef. Running before it would
   // see every wrap a frame late.
-  if (octopus) octopus.update(t, dt, { reducedMotion });
+  if (octopus) octopus.update(t, dt, {
+    reducedMotion,
+    // A pass in progress sends him back to the reef and keeps him there.
+    predator: !!(shark && shark.active),
+  });
+
+  // ⭐ Re-evaluate when the pass STARTS or ENDS, not just when the board
+  // changes. syncOctopus() is otherwise only called on a capture or a pop, so
+  // without this he would either stay in the foreground until the next time a
+  // die moved, or - worse - never come back after the shark had gone even
+  // though the O was still sitting in the bubble.
+  const sharkNow = !!(shark && shark.active);
+  if (sharkNow !== sharkWasActive) {
+    sharkWasActive = sharkNow;
+    syncOctopus();
+  }
   if (popFX) popFX.update(dt);
-  if (creatures) creatures.update(dt);
+  if (ink) ink.update(dt);
 
   if (running) {
     updateBubbles(bubbles, t, dt, reducedMotion, popFX);
@@ -510,6 +566,21 @@ function frame() {
           if (P.stepCapture(die, dt)) {
             fillBubble(u.capBubble, die);
             A.playPhoneme(u.ch);
+            // ⭐ i is for ink - and the ink comes out of the OCTOPUS, wherever
+            // he happens to be. The letter is only the trigger.
+            //
+            // ⛔ Not fired at the bubble. An earlier version puffed the cloud
+            // around the letter itself, which made it look like the `i` was
+            // leaking: the joke only works if the ink has an animal attached to
+            // it. He may be far out on the reef, in which case it is a small
+            // puff in the distance, or right under the middle bubble doing the
+            // O routine, in which case it is a proper cloud - perspective sizes
+            // it correctly either way with no special casing.
+            if (ink && u.ch === 'i' && octopus) {
+              const o = octopus.inkOrigin();
+              if (o) ink.puff(o.x, o.y, o.r, o.z);
+            }
+            syncOctopus();
             setTimeout(speakIfReady, 120);
           }
           break;
@@ -603,6 +674,7 @@ window.__bubblecvc = {
     const freed = popBubble(b);
     for (const die of freed) P.sendHome(die);
     lastSpoken = '';
+    syncOctopus();
     return 'popped ' + i + ' (released ' + freed.length + ')';
   },
   get bayTop() { return bayTop; },

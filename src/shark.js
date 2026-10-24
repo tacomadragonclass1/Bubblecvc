@@ -175,7 +175,7 @@ export function createSharkPass(scene, creatures) {
   // found rather than assuming 1.0.
   const causticBase = waterUniforms.uCausticStrength.value;
 
-  function begin() {
+  function begin(t) {
     active = true;
     waitingSince = 0;
     u = 0;
@@ -201,6 +201,13 @@ export function createSharkPass(scene, creatures) {
     y0 = rand(-bounds.y * 0.34, -bounds.y * 0.12);
     y1 = rand(-bounds.y * 0.16, bounds.y * 0.12);
     phase = Math.random() * Math.PI * 2;
+    // ⛔⛔ POSITION FIRST, THEN SHOW. update() returns immediately after calling
+    // begin(), so if the holder is made visible here while its transform is
+    // still whatever the last pass left behind, it renders once at that stale
+    // position before the next frame corrects it. That is a full-size shark
+    // appearing for a single frame somewhere it has no business being, a beat
+    // before the real entrance.
+    place(t);
     holder.visible = true;
   }
 
@@ -237,28 +244,18 @@ export function createSharkPass(scene, creatures) {
     return halfWidthAt(camera, z) + bodyHalfLength + LEAD;
   }
 
-  function update(t, dt, ctx) {
-    clockT = t;
-    if (ctx.bounds) bounds = ctx.bounds;
-    camNow = ctx.camera;
-    if (!active) {
-      if (ctx.live && t >= nextAt) {
-        if (ctx.idle) {
-          begin();
-        } else {
-          if (!waitingSince) waitingSince = t;
-          // Overdue and still blocked: let it go anyway unless a word is
-          // actually being spoken.
-          if (t - waitingSince > GRACE && !ctx.speaking) begin();
-        }
-      }
-      return;
-    }
-    // The lesson ended mid-pass (Home pressed). The scene is behind the
-    // prescreen now, so finish quietly rather than animating to nobody.
-    if (!ctx.live) { end(); return; }
-
-    u += dt / CROSS_SECONDS;
+  /**
+   * Put the shark where its clock says it should be, and return its x.
+   *
+   * ⛔ THIS EXISTS SO begin() CAN CALL IT. The placement used to live inline in
+   * update(), below an early `return` that fires on the very frame a pass
+   * starts - so begin() made the holder VISIBLE and then update() returned
+   * without ever setting its position. For one frame the shark rendered at a
+   * stale transform: (0,0,0) on the first pass of a session, which is the dead
+   * centre of the play plane at close-up scale, or wherever it was abandoned if
+   * a lesson ended mid-pass. That is the giant flash a frame before it enters.
+   */
+  function place(t) {
 
     // Position, with a slow swell on top so it never travels on rails.
     // ⛔ The approach has to be AHEAD of the sweep, not behind it. A cubic (u³)
@@ -286,6 +283,32 @@ export function createSharkPass(scene, creatures) {
     const x = xStart + (xEnd - xStart) * u;
     const y = y0 + (y1 - y0) * ease + Math.sin(t * 0.22 + phase) * 1.1;
     holder.position.set(x, y, Z_ENTER + (zExit - Z_ENTER) * approach);
+    return x;
+  }
+
+  function update(t, dt, ctx) {
+    clockT = t;
+    if (ctx.bounds) bounds = ctx.bounds;
+    camNow = ctx.camera;
+    if (!active) {
+      if (ctx.live && t >= nextAt) {
+        if (ctx.idle) {
+          begin(t);
+        } else {
+          if (!waitingSince) waitingSince = t;
+          // Overdue and still blocked: let it go anyway unless a word is
+          // actually being spoken.
+          if (t - waitingSince > GRACE && !ctx.speaking) begin(t);
+        }
+      }
+      return;
+    }
+    // The lesson ended mid-pass (Home pressed). The scene is behind the
+    // prescreen now, so finish quietly rather than animating to nobody.
+    if (!ctx.live) { end(); return; }
+
+    u += dt / CROSS_SECONDS;
+    const x = place(t);
 
     // ⛔ The pass ends when the body is GENUINELY OFF SCREEN, not when a counter
     // reaches 1. A pass was seen to "flicker and disappear" mid-screen, and every
@@ -357,7 +380,7 @@ export function createSharkPass(scene, creatures) {
       return true;
     },
     /** Debug / preview: start one now, ignoring the schedule. */
-    now() { if (!active) begin(); },
+    now() { if (!active) begin(clockT); },
     dispose() {
       scene.remove(holder);
       waterUniforms.uCausticStrength.value = causticBase;

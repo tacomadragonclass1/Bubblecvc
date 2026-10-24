@@ -38,33 +38,63 @@ import { FLOOR_Y, Z_FRONT, SPAN } from './reef.js';
 // small for a classroom panel at the back of the room to read as "scurrying".
 // At ~6 units across it runs 5% of screen height at the far end and 10% by the
 // time its garden is leaving shot, which is the band that actually reads.
-const SCALE = 2.1;
+// ⛔ 3.0, raised from 2.1, and the reason is that three separate things were
+// multiplying to make this animal invisible in the actual app: it is SMALL, it
+// spends a lot of its time CAMOUFLAGED, and it sits in the busiest strip of the
+// frame among the coral and the letter dice. Each was defensible alone; together
+// they meant a teacher watching for it saw nothing at all. At 3.0 it runs ~10%
+// of screen height through the middle of its approach, which is findable
+// without being a distraction up where the letters are.
+const SCALE = 3.0;
 
 // How high above the sea bed it perches. A garden is scaled 1.6-3.4x and its
 // coral stands ~7 local units tall, so this puts the octopus up ON the coral
 // rather than down in the silt - which matters because the floor at y = -40
 // drops out of the bottom of frame while the band is still approaching, and
 // something sitting on the floor would spend most of its pass invisible.
-const PERCH_UP = 5.0;
+// Raised with SCALE for the same reason: perched higher it is silhouetted
+// against open water rather than buried in the coral it is sitting on.
+const PERCH_UP = 7.5;
 const PERCH_PER_SCALE = 3.2;
 
-// ⭐ Chance it takes any given opportunity to appear, and this number is
-// MEASURED, not picked. A band wraps every ~14s (4 bands, a 57s cycle), and a
-// pass that is taken puts the octopus on screen for ~54s of it. So:
+// ⛔ HE IS ALWAYS THERE. There is no appearance lottery any more.
 //
-//   0.55 -> on screen 54s out of every 79s. Permanent furniture, not an event.
-//   0.30 -> away ~50s between passes.
-//   0.16 -> away ~99s between passes (range 14-353s).  <- chosen
+// This started as a sporadic visitor on a 16% chance per band wrap, which meant
+// you could watch the reef for two minutes and see nothing. Raising the odds
+// helped, but the real problem was the model: once the letter O calls him to
+// the foreground, "is he around?" stops being an interesting question and
+// becomes a reason the trick sometimes does not fire. So he simply LIVES on the
+// reef - when his garden recycles to the back he moves to another one on the
+// same band, and he is on screen essentially all the time.
 //
-// 0.16 means present about a third of the time and genuinely unpredictable,
-// which is the same register as the shark pass (90-170s) without making a reef
-// DWELLER behave like a scheduled event. Re-measure with test/_vis.mjs.
-const APPEAR_CHANCE = 0.16;
+// What makes him interesting is now the camouflage and the scurrying, not his
+// absence.
 
 // Its own colour, and the tones it camouflages INTO. The blend targets are
 // taken from the reef palette (brain coral, rock, ochre table coral) so a
 // camouflaged octopus matches something that is actually out there.
-const BLEND_TONES = [0xc98f7a, 0x27506b, 0xb8a06a, 0x1d6b63, 0x163449];
+// ⭐ The tones he camouflages INTO, and they are deliberately a WIDE spread -
+// warm terracotta, cold slate, ochre, deep teal, near-black. Earlier these all
+// sat in the same muddy mid-range, so a colour change was technically happening
+// and visually almost nothing: he shifted from one brown to a slightly
+// different brown. Camouflage is the best thing this creature does and it has
+// to be legible from the back of a classroom, so the targets are now far apart
+// from each other AND far from his own mauve.
+const BLEND_TONES = [
+  0xd98a5a,   // warm sand
+  0x1d5f8a,   // cold blue, the opposite side of the wheel from his own colour
+  0xc9b24e,   // ochre-gold
+  0x16806a,   // deep teal
+  0x3a2740,   // near-black aubergine
+  0xb43f5a,   // deep coral red
+];
+
+// ⛔ A FRIGHTENED OCTOPUS MATCHES THE SEA BED, not whatever colour came up in
+// the shuffle. The full palette above is wide on purpose - the idle colour
+// changes should be seen - but the fear reaction is the one moment he is
+// actually trying not to be noticed, and flushing cold blue while crouched on
+// tan rock is the opposite of hiding. These are only the substrate tones.
+const SPOOK_TONES = [0xd98a5a, 0xc9b24e, 0x3a2740, 0x27506b];
 
 /**
  * Adopt the modelled octopus and find the materials the camouflage has to drive.
@@ -76,6 +106,66 @@ const BLEND_TONES = [0xc98f7a, 0x27506b, 0xb8a06a, 0x1d6b63, 0x163449];
  * coral for a minute at a time is worse than no octopus at all. If the model is
  * absent the whole feature switches off and the reef is simply empty.
  */
+// ------------------------------------------------------ the migration
+// ⛔ HE SWIMS BACK. HE DOES NOT RIDE THE BAND ROUND.
+//
+// A band recycles the instant it passes Z_FRONT (-30), jumping straight to the
+// back of the reef - and he is still plainly on screen at that point (his perch
+// sits at -0.86 of the frame height when the jump happens, nowhere near the
+// bottom edge). Riding it round meant he blinked out downstage and blinked back
+// in upstage, which is the single most illusion-breaking thing in the scene.
+//
+// So when his garden gets close to being overtaken he LEAVES it and torpedoes
+// to the back of the reef under his own power: head first, arms streamed behind
+// him, body stretched along the direction of travel. Then he picks a new garden
+// on the furthest band and settles.
+const MIGRATE_AT = -72;     // band z at which he gives up on this garden
+const MIGRATE_SPEED = 34;   // world units per second - this is the fast one
+const MIGRATE_MIN = 2.6;
+const MIGRATE_MAX = 5.0;
+// How hard the arms stream back during the dash, in radians at the last bone.
+// Applied ON TOP of whatever the Idle clip wrote this frame - see stepMigrate.
+const ARM_SWEEP = 0.95;
+
+// ------------------------------------------------- the "O" routine
+// ⭐ Spell an O into the vowel bubble and the octopus comes to look at it.
+//
+// An octopus begins with O, so the letter is his. He leaves the reef, swims
+// toward the camera, parks under the middle bubble and tips his head back to
+// stare up at the letter until the word is finished.
+//
+// ⛔ HE STOPS BEHIND THE PLAY PLANE, NOT IN FRONT OF IT. The hero shark passes
+// in front of the bubbles and that is right for a two-second event, but this
+// one HOLDS for as long as a child takes to finish a word. There is only 4.1
+// units of clear space between the bottom of the bubble row (y -0.4) and the
+// top of the dice bay (y -4.5), so a creature big enough to read cannot fit
+// between them. At z -8 he is 32% of screen height - unmistakably big - and
+// every die and bubble still draws in front of him, so nothing a child needs
+// to read is ever occluded.
+const ADMIRE_POS = new THREE.Vector3(0, -2.8, -8);
+// Tipped back to look UP. rotation.y 0 already faces the camera (the reef
+// heading maths uses atan2(dx, dz), so zero is +Z), and a positive x rotation
+// tips his top toward the camera, which reads as a head tilting back.
+//
+// ⛔ 0.62 is near the ceiling, not a midpoint. At 1.05 the mantle rolls over
+// the top of the face and HIDES both eyes - he reads as turning away rather
+// than looking up. The eyes are the whole point of the pose, so the tilt is
+// capped at whatever still shows them.
+const ADMIRE_PITCH = 0.62;
+// He is much closer than his reef perch, so he needs LESS scale, not more -
+// perspective is already doing the work of making him big.
+const ADMIRE_SCALE = 0.62;
+// ⛔ HE TAKES HIS TIME. The first version crossed from the reef to the
+// foreground in 1.9s flat, which from the back of the reef is most of the width
+// of the world and read as a creature being yanked on a string. Duration is
+// derived from the distance he actually has to cover, so a long trip takes
+// longer, and the whole thing is unhurried: if the child finishes the word
+// before he arrives, he simply turns around. Arriving is not the point.
+const ADMIRE_SPEED = 24;    // world units per second
+const ADMIRE_IN_MIN = 2.4;
+const ADMIRE_IN_MAX = 6.5;
+const ADMIRE_OUT = 2.2;     // seconds swimming back out
+
 function adoptModel(creatures) {
   const holder = creatures && creatures.make('reefOctopus', 1);
   if (!holder) return null;
@@ -98,7 +188,22 @@ function adoptModel(creatures) {
       else skin.push(m);                                     // body
     }
   });
-  return { holder, skin, trim, keep, base: skin.map(m => m.color.clone()),
+  // ⭐ The deform bones, so the dash can stream the arms back.
+  //
+  // tools/rig_octopus.py builds a four-bone chain down the body - b0 is the
+  // mantle (deliberately rigid), b1..b3 carry progressively more of the arms.
+  // Posing b1..b3 is how an arm sweep happens at all: the baked Idle clip makes
+  // them undulate, but nothing in it streams them, and a clip cannot know which
+  // way he is travelling anyway.
+  const bones = [];
+  holder.traverse(o => {
+    if (!o.isSkinnedMesh || !o.skeleton) return;
+    for (const b of o.skeleton.bones) if (!bones.includes(b)) bones.push(b);
+  });
+  bones.sort((a, b) => (a.name > b.name ? 1 : -1));   // b0, b1, b2, b3
+
+  return { holder, skin, trim, keep, bones,
+           base: skin.map(m => m.color.clone()),
            trimBase: trim.map(m => m.color.clone()) };
 }
 
@@ -144,6 +249,19 @@ export function createReefOctopus(scene, creatures, getReef) {
   let facing = 0;           // yaw, radians
   let facingTo = 0;
 
+  // True while a shark pass is on. A predator outranks everything else he
+  // might be doing.
+  let spooked = false;
+  let wasSpooked = false;
+
+  // The migration. Non-null while he is swimming back to the far reef.
+  // { t, dur, from: Vector3, toBand }
+  let migrate = null;
+
+  // The "O" routine. Non-null while he is away from the reef admiring a letter.
+  // { phase: 'in'|'hold'|'out', t, from: Vector3, fromScale }
+  let show = null;
+
   // Chameleon.
   let blend = 0.2;          // 0 = its own colour, 1 = matching the coral
   let blendTo = 0.2;
@@ -154,6 +272,15 @@ export function createReefOctopus(scene, creatures, getReef) {
 
   const rnd = (a, b) => a + Math.random() * (b - a);
 
+  /** Put him on the furthest band available, right now. */
+  function settleFar() {
+    const reef = getReef && getReef();
+    const bands = (reef && reef.bands) || [];
+    if (!bands.length) return false;
+    const far = bands.slice().sort((a, b) => a.position.z - b.position.z)[0];
+    return settleOn(far);
+  }
+
   /** Leave. The pass is over, or the reef was rebuilt under us. */
   function retire() {
     if (band) band.remove(holder);
@@ -163,19 +290,33 @@ export function createReefOctopus(scene, creatures, getReef) {
   }
 
   /** Move in, on a band that has just wrapped to the far end. */
-  function settleOn(newBand) {
+  function settleOn(newBand, want = null) {
     const clusters = newBand.children.filter(c => c.userData && c.userData.isCluster);
     if (!clusters.length) return false;
-    const c = clusters[Math.floor(Math.random() * clusters.length)];
+    // `want` is the garden a migration aimed at - honouring it is what makes
+    // the arrival continuous with the swim.
+    const c = (want && clusters.includes(want))
+      ? want : clusters[Math.floor(Math.random() * clusters.length)];
     const cs = c.userData.clusterScale || 2;
 
+    // ⛔ NO RANDOM OFFSET WHEN A SWIM AIMED HERE. perchOn() computed the exact
+    // world point he has been swimming toward for the last few seconds; jogging
+    // the anchor a couple of units sideways on arrival puts a visible hop on
+    // the end of an otherwise continuous move.
+    const exact = !!(want && c === want);
     anchor = {
-      x: c.position.x + rnd(-2.5, 2.5),
+      x: c.position.x + (exact ? 0 : rnd(-2.5, 2.5)),
       y: FLOOR_Y + PERCH_UP + cs * PERCH_PER_SCALE,
-      z: c.position.z + rnd(-1.5, 2.5),
+      z: c.position.z + (exact ? 0 : rnd(-1.5, 2.5)),
     };
     band = newBand;
     band.add(holder);
+    // ⛔⛔ SET THE LOCAL POSITION IMMEDIATELY. `holder.position` may still hold
+    // a WORLD position from a swim that just ended, and band.add() does not
+    // convert it - so the band's own z gets added to it and he lands at twice
+    // the depth (a measured -262 on a band at -131) until the next frame
+    // corrects it. One frame, 131 units out, right at the end of the dash.
+    holder.position.set(anchor.x, anchor.y, anchor.z);
     holder.visible = true;
 
     at.set(0, 0, 0); from.copy(at); to.copy(at);
@@ -223,12 +364,33 @@ export function createReefOctopus(scene, creatures, getReef) {
       modeDur = reduced ? rnd(4.5, 9) : rnd(2.4, 6.5);
       to.copy(at);
       // A long rest is when it commits to a camouflage phase.
-      if (Math.random() < 0.55) {
-        blendTo = rnd(0.75, 1.0);          // nearly gone
-        blendDur = rnd(2.5, 5.0);
+      //
+      // ⛔ 0.32, not 0.55, and the top of the range is 0.90 rather than 1.0.
+      // Camouflage is the best thing this creature does and it was also what
+      // made it impossible to find: at a 55% chance of blending to FULL match,
+      // the animal was effectively absent more often than it was present. It
+      // now hides less often and never completely - there is always a little of
+      // its own colour left, which is the difference between "well hidden" and
+      // "not there". Spotting it is the game; winning that game has to be
+      // possible.
+      // ⭐ He commits. The old range left him hovering around the middle a lot,
+      // where the skin is a blend of two colours and reads as neither - which
+      // is the least interesting place on the dial. Now he is either clearly
+      // wearing a colour or clearly wearing his own, and the eye can see the
+      // change happen.
+      if (Math.random() < 0.45) {
+        blendTo = rnd(0.82, 0.96);         // wearing the tone, near fully
+        blendDur = rnd(2.2, 4.2);
+        // A fresh tone for each hiding phase, so consecutive changes are
+        // between DIFFERENT colours rather than the same one twice.
+        let next = tone;
+        for (let g = 0; g < 4 && next.getHex() === tone.getHex(); g++) {
+          next = new THREE.Color(BLEND_TONES[Math.floor(Math.random() * BLEND_TONES.length)]);
+        }
+        tone = next;
       } else {
-        blendTo = rnd(0.0, 0.35);          // sitting there in plain colour
-        blendDur = rnd(2.0, 4.0);
+        blendTo = rnd(0.0, 0.12);          // unmistakably his own colour
+        blendDur = rnd(1.8, 3.4);
       }
       blendT = 0;
     }
@@ -239,27 +401,448 @@ export function createReefOctopus(scene, creatures, getReef) {
     modeT = 0;
   }
 
-  function update(t, dt, opts = {}) {
-    const reduced = !!opts.reducedMotion;
+  /**
+   * Push the current camouflage value onto the model's materials. Shared by the
+   * reef behaviour and the O routine so the two can never drift apart.
+   */
+  function paint() {
+    const shown = THREE.MathUtils.clamp(blend - flush * 0.55, 0, 1);
+    // Every skin material shifts from ITS OWN base colour toward the chosen
+    // coral tone. Starting from each material's own colour rather than from one
+    // shared constant matters: the model is painted in several related mauves,
+    // and flattening them all to a single colour would throw away the shading
+    // the artist built in and leave a plastic silhouette.
+    body.skin.forEach((m, i) => {
+      // ⛔ The tone is applied at FULL strength at shown = 1, not at a fraction
+      // of it. A cap here is invisible in the code and reads on screen as the
+      // camouflage never quite working.
+      m.color.copy(body.base[i]).lerp(tone, shown);
+      // Camouflaged skin also goes matte - a blended octopus still carrying a
+      // wet highlight gives itself away immediately.
+      if (m.roughness !== undefined) m.roughness = 0.55 + shown * 0.3;
+    });
+    // The suckers and eye whites dim toward the body but never all the way: a
+    // perfectly camouflaged octopus is an invisible one, and SPOTTING it is the
+    // game. Real cephalopods keep the pupil dark through a colour change, so
+    // `body.keep` is deliberately never touched.
+    body.trim.forEach((m, i) => {
+      m.color.copy(body.trimBase[i]).lerp(tone, shown * 0.7);
+    });
+  }
+
+  /**
+   * World-space perch on a SPECIFIC garden.
+   *
+   * ⛔ IT TAKES THE CLUSTER, IT DOES NOT CHOOSE ONE. The first version picked a
+   * random cluster on every call, and it is called once a frame during the
+   * dash - so the destination jittered between gardens the whole way across and
+   * he still arrived with a 66-unit jump when settleOn() then picked a third
+   * one. Commit to a destination at the start and swim to THAT.
+   */
+  function perchOn(b, c) {
+    const cs = (c && c.userData.clusterScale) || 2;
+    return new THREE.Vector3(
+      c ? c.position.x : 0,
+      FLOOR_Y + PERCH_UP + cs * PERCH_PER_SCALE,
+      b.position.z + (c ? c.position.z : 0));
+  }
+
+  /** Give up on this garden and swim for the back of the reef. */
+  function startMigration() {
     const reef = getReef && getReef();
     const bands = (reef && reef.bands) || [];
+    // Furthest band that is NOT the one he is leaving.
+    const far = bands.filter(b => b !== band)
+                     .sort((a, b2) => a.position.z - b2.position.z)[0];
+    if (!far) return;
+    const from = new THREE.Vector3();
+    holder.getWorldPosition(from);
+    if (band) band.remove(holder);
+    band = null; anchor = null;
+    scene.add(holder);
+    holder.position.copy(from);
+    holder.visible = true;
+    const clusters = far.children.filter(c => c.userData && c.userData.isCluster);
+    const toCluster = clusters.length
+      ? clusters[Math.floor(Math.random() * clusters.length)] : null;
+    const dist = from.distanceTo(perchOn(far, toCluster));
+    migrate = {
+      t: 0,
+      dur: THREE.MathUtils.clamp(dist / MIGRATE_SPEED, MIGRATE_MIN, MIGRATE_MAX),
+      from,
+      toBand: far,
+      toCluster,
+    };
+    // Flush to his own colours for the dash. An animal bolting is not hiding.
+    blendTo = 0.05; blendT = 0; blendDur = 0.8;
+    flush = 1;
+  }
+
+  /**
+   * Bend the deform chain by `amount`, growing toward the arm tips.
+   *
+   * b0 is the mantle and is left alone - an octopus's body is firm and only the
+   * arms flow, which is also why tools/rig_octopus.py gives b0 zero amplitude
+   * in the Idle clip.
+   */
+  function armSweep(amount) {
+    const bones = body.bones;
+    for (let i = 1; i < bones.length; i++) {
+      // Ramped down the chain so the arc opens out toward the tips instead of
+      // hinging at one joint.
+      bones[i].rotation.x += amount * (i / (bones.length - 1)) * 0.8;
+    }
+  }
+
+  /** Advance the dash. Returns true while it owns him. */
+  function stepMigrate(t, dt) {
+    const reef = getReef && getReef();
+    const bands = (reef && reef.bands) || [];
+    if (!bands.includes(migrate.toBand)) {   // reef rebuilt under us
+      migrate = null;
+      settleFar();
+      return false;
+    }
+    migrate.t += dt;
+    const k = Math.min(1, migrate.t / migrate.dur);
+    // ⛔ The destination is recomputed EVERY FRAME. The target band is itself
+    // travelling forward at TRAVEL u/s the whole time he is swimming, so a
+    // target captured at the start would leave him arriving several units in
+    // front of the garden he aimed at.
+    const to = perchOn(migrate.toBand, migrate.toCluster);
+    // easeInOut, but weighted to a hard launch - the push off the coral is the
+    // bit that reads as a torpedo.
+    // ⛔ THE BASE IS CLAMPED, AND IT HAS TO BE. At k = 1, (1 - 0.18) / 0.82
+    // evaluates to 1.0000000000000002 in floating point, so the base lands at
+    // -2.2e-16 - and Math.pow(negative, fractional) is NaN. That NaN went
+    // straight into holder.position on the last frame of every single dash and
+    // the octopus's world position was briefly not a number.
+    const tail = Math.max(0, 1 - (k - 0.18) / 0.82);
+    const e = k < 0.18 ? (k / 0.18) * (k / 0.18) * 0.22
+                       : 0.22 + 0.78 * (1 - Math.pow(tail, 2.2));
+    holder.position.lerpVectors(migrate.from, to, e);
+
+    // Head first, arms behind: he faces the way he is going, which is away
+    // from the camera, and rotation.y 0 already means facing +Z.
+    const dir = to.clone().sub(migrate.from);
+    holder.rotation.y = Math.atan2(dir.x, dir.z);
+    // Nose down slightly into the dive, levelling off as he arrives.
+    holder.rotation.x = -0.28 * Math.sin(k * Math.PI);
+    holder.rotation.z = Math.sin(t * 2.2) * 0.07 * (1 - k);
+
+    // Stretched along the direction of travel while the speed is up. Squash and
+    // stretch is what sells velocity on a creature with no visible propulsion.
+    const speed = Math.sin(Math.min(1, k / 0.75) * Math.PI);
+    holder.scale.set(SCALE * (1 - speed * 0.16), SCALE * (1 - speed * 0.16),
+                     SCALE * (1 + speed * 0.42));
+    if (mixer) mixer.timeScale = 1 + speed * 2.2;   // arms thrashing
+
+    // ⭐ ARMS STREAMED BACK. Squash-and-stretch alone does not read as a
+    // torpedo - the silhouette has to change, and on this animal the
+    // silhouette IS the arms.
+    //
+    // ⛔ This ADDS to the pose the AnimationMixer wrote this frame rather than
+    // replacing it, so the Idle undulation still plays underneath and the arms
+    // keep flexing while they trail. It only works because main.js runs
+    // creatures.update() (the mixers) BEFORE this; with the old order the clip
+    // overwrote all of it and the dash had no arms in it at all.
+    armSweep(speed * ARM_SWEEP);
+
+    if (k >= 1) {
+      const b = migrate.toBand, c = migrate.toCluster;
+      migrate = null;
+      holder.scale.setScalar(SCALE);
+      holder.rotation.set(0, 0, 0);
+      scene.remove(holder);
+      // ⛔ Settle on the garden he actually swam to, not a fresh random one.
+      settleOn(b, c);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Come and look at the letter. Safe to call repeatedly - a second call while
+   * he is already on his way in, or already there, does nothing.
+   *
+   * Works whether or not he is currently on the reef: if he is away between
+   * passes the letter SUMMONS him, and he swims up from below the frame.
+   */
+  function admire() {
+    // ⛔ A SHARK OUTRANKS A LETTER. Refusing here rather than only gating the
+    // caller matters because the caller re-evaluates the board after every
+    // change: without this, popping and re-throwing the O during a pass would
+    // walk him straight back out into the shark's path.
+    if (spooked) return;
+    if (show && show.phase !== 'out') return;
+    // The letter outranks the commute. If he is mid-dash he turns and comes.
+    if (migrate) { migrate = null; holder.scale.setScalar(SCALE); holder.rotation.set(0, 0, 0); }
+    const from = new THREE.Vector3();
+    if (show) {
+      // Caught mid-retreat - turn him around from wherever he got to.
+      from.copy(holder.position);
+    } else if (band) {
+      // On the reef: start from where he actually is, so he swims in from his
+      // garden rather than teleporting to a start mark.
+      holder.getWorldPosition(from);
+    } else {
+      // Away. Rise into frame from below, centre-ish, rather than fading in -
+      // a creature appearing out of nothing is the thing this whole file keeps
+      // trying not to do.
+      from.set(rnd(-6, 6), -26, -14);
+    }
+    if (band) { band.remove(holder); }
+    band = null; anchor = null;
+    scene.add(holder);
+    holder.position.copy(from);
+    holder.visible = true;
+    // ⭐ Duration from DISTANCE, not a constant. He may be setting off from the
+    // very back of the reef or from a garden that is nearly out of frame, and a
+    // fixed duration makes the far trip a panicked dash and the near one a
+    // crawl. Clamped at both ends so it never looks teleported or glacial.
+    const dist = from.distanceTo(ADMIRE_POS);
+    const dur = THREE.MathUtils.clamp(dist / ADMIRE_SPEED, ADMIRE_IN_MIN, ADMIRE_IN_MAX);
+    show = { phase: 'in', t: 0, from: from.clone(), dur };
+    // Arrive in his own colours. Camouflage is for hiding on the reef; this is
+    // the opposite of hiding.
+    blendTo = 0.0; blendT = 0; blendDur = 1.2;
+    flush = 1;
+  }
+
+  /**
+   * The O has left the bubble. Swim back out to the reef.
+   *
+   * ⛔ HE SWIMS TO AN ACTUAL GARDEN, not to a generic "away" point. The first
+   * version retreated to a fixed spot below and behind, then called settleFar()
+   * - which placed him on the reef instantly, a 148-unit jump, and that
+   * endpoint was still ON SCREEN (y -30 at z -70 is 0.75 of the way down the
+   * frame, not past the edge). So the exit ended in exactly the teleport the
+   * migration exists to avoid. The retreat is now just a migration with a
+   * different starting point.
+   */
+  function release() {
+    if (!show || show.phase === 'out') return;
+    const reef = getReef && getReef();
+    const bands = (reef && reef.bands) || [];
+    const far = bands.slice().sort((a, b) => a.position.z - b.position.z)[0] || null;
+    const clusters = far ? far.children.filter(c => c.userData && c.userData.isCluster) : [];
+    const toCluster = clusters.length
+      ? clusters[Math.floor(Math.random() * clusters.length)] : null;
+    const from = holder.position.clone();
+    // ⛔ Distance-based, like the migration, and for the same reason: a fixed
+    // 2.2s had to cover a turn on the spot AND a ~120 unit dash back to the
+    // reef, so neither read - he snapped round and shot off in a blur. The
+    // turn needs time to be seen as a turn.
+    const dist = far ? from.distanceTo(perchOn(far, toCluster)) : 90;
+    show = {
+      phase: 'out',
+      t: 0,
+      from,
+      dur: THREE.MathUtils.clamp(dist / MIGRATE_SPEED, ADMIRE_OUT, MIGRATE_MAX),
+      toBand: far,
+      toCluster,
+    };
+  }
+
+  /** Is he currently doing the O routine? */
+  function isAdmiring() { return !!show && show.phase !== 'out'; }
+
+  /**
+   * The O routine, run instead of the reef behaviour. Returns true while it
+   * owns the octopus.
+   */
+  function stepShow(t, dt) {
+    show.t += dt;
+    // ⛔ USE show.dur FOR BOTH PHASES. This line used to hardcode ADMIRE_OUT for
+    // the retreat, which silently threw away the distance-based duration
+    // release() had just computed - so the turn-and-torpedo had 2.2s to cover a
+    // 115-unit swim and went past in a blur.
+    const dur = show.dur || (show.phase === 'out' ? ADMIRE_OUT : ADMIRE_IN_MIN);
+    const k = Math.min(1, show.t / dur);
+
+    if (show.phase === 'hold') {
+      // Parked under the letter. A slow hover and a little sway, so he reads as
+      // treading water and looking rather than as a pasted-on sprite.
+      const bob = Math.sin(t * 0.9) * 0.22;
+      const sway = Math.sin(t * 0.61) * 0.5;
+      holder.position.set(ADMIRE_POS.x + sway, ADMIRE_POS.y + bob, ADMIRE_POS.z);
+      holder.rotation.set(ADMIRE_PITCH + Math.sin(t * 0.77) * 0.045,
+                          Math.sin(t * 0.43) * 0.19, Math.sin(t * 0.55) * 0.05);
+      holder.scale.setScalar(SCALE * ADMIRE_SCALE);
+      if (mixer) mixer.timeScale = 0.75;
+      return true;
+    }
+
+    if (show.phase === 'in') {
+      // ⛔ Eased at BOTH ends, not just the arrival. easeOutCubic starts at full
+      // speed, which is exactly the "yanked on a string" look - he has to push
+      // off gently, cross, and settle. smootherstep does all three.
+      const e = k * k * k * (k * (k * 6 - 15) + 10);
+      holder.position.lerpVectors(show.from, ADMIRE_POS, e);
+      holder.rotation.set(ADMIRE_PITCH * e, 0, 0);
+      // Grow from his reef size to his close-up size along the way.
+      holder.scale.setScalar(SCALE * (1 + (ADMIRE_SCALE - 1) * e));
+      if (mixer) mixer.timeScale = 1.6;        // working at it
+      if (k >= 1) show = { phase: 'hold', t: 0, from: show.from, dur };
+      return true;
+    }
+
+    // ---- 'out': TURN, THEN TORPEDO ----------------------------------------
+    //
+    // ⛔ THIS IS NOT THE APPROACH PLAYED BACKWARDS, and the first version was
+    // exactly that: a straight lerp home with the pitch easing out and - thanks
+    // to a `* 0.0` left in the yaw term - no turn whatsoever. He drifted away
+    // still facing the camera, arms hanging, and the whole exit read as a
+    // rewind rather than as an animal leaving.
+    //
+    // He is facing the CAMERA when this starts (that is the whole admire pose),
+    // and he has to end up facing the opposite way. So the move is in two
+    // parts: a visible turn on the spot, then a dash with the arms streamed
+    // back toward the viewer, which is the shape the migration already uses.
+    const reef2 = getReef && getReef();
+    const bands2 = (reef2 && reef2.bands) || [];
+    const stillThere = show.toBand && bands2.includes(show.toBand);
+    // Recomputed every frame: the destination band is travelling forward the
+    // whole time he is swimming to it.
+    const home = stillThere ? perchOn(show.toBand, show.toCluster)
+                            : new THREE.Vector3(show.from.x * 0.4, -24, -90);
+
+    // The turn happens up front and barely moves him - you have to SEE him come
+    // about before he goes.
+    const TURN = 0.3;
+    const turn = Math.min(1, k / TURN);
+    const turnE = turn * turn * (3 - 2 * turn);
+    // Travel eases in only after the turn is underway, so he does not slide
+    // away sideways while still coming about.
+    const go = Math.max(0, (k - TURN * 0.55) / (1 - TURN * 0.55));
+    const e = go * go * (3 - 2 * go);
+    holder.position.lerpVectors(show.from, home, e);
+
+    // Face where he is going. He starts at yaw 0 (looking at the camera) and
+    // swings to the heading of his travel - which is into the screen, so this
+    // is close to a half turn.
+    const dirOut = home.clone().sub(show.from);
+    const yawTo = Math.atan2(dirOut.x, dirOut.z);
+    let dYaw = yawTo;
+    while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+    while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+    holder.rotation.y = dYaw * turnE;
+    // Level out of the look-up as he comes about, then nose down into the dive.
+    holder.rotation.x = ADMIRE_PITCH * (1 - turnE) - 0.22 * Math.sin(e * Math.PI);
+    holder.rotation.z = Math.sin(t * 2.4) * 0.06 * (1 - e);
+
+    // ⭐ Arms streamed BACK - which, since he is swimming away, means stretched
+    // out toward the camera. Same mechanism as the migration dash.
+    const outSpeed = Math.sin(Math.min(1, Math.max(0, (k - TURN) / (1 - TURN))) * Math.PI);
+    armSweep(outSpeed * ARM_SWEEP);
+
+    // Shrink back toward his reef size, elongated along travel while quick.
+    const sc = SCALE * (ADMIRE_SCALE + (1 - ADMIRE_SCALE) * e);
+    holder.scale.set(sc * (1 - outSpeed * 0.16), sc * (1 - outSpeed * 0.16),
+                     sc * (1 + outSpeed * 0.42));
+    if (mixer) mixer.timeScale = 1 + outSpeed * 2.2;
+    if (k >= 1) {
+      const b = stillThere ? show.toBand : null;
+      const c = show.toCluster;
+      show = null;
+      holder.scale.setScalar(SCALE);
+      holder.rotation.set(0, 0, 0);
+      scene.remove(holder);
+      if (b) settleOn(b, c); else settleFar();
+      return false;
+    }
+    return true;
+  }
+
+  function update(t, dt, opts = {}) {
+    const reduced = !!opts.reducedMotion;
+
+    // ⭐ A shark is passing. He gets out of the foreground, and he does it the
+    // same way he leaves for any other reason - by swimming, through the usual
+    // retreat - so there is no special-case motion to go wrong.
+    //
+    // ⛔ The hero shark passes IN FRONT of the bubbles. An octopus parked under
+    // the middle bubble during a pass is not merely odd, it is directly in the
+    // way of the one big event in the app.
+    spooked = !!opts.predator;
+    if (spooked && !wasSpooked) {
+      // Pick a sea-bed colour once, on the fright, and hold it for the pass.
+      tone = new THREE.Color(SPOOK_TONES[Math.floor(Math.random() * SPOOK_TONES.length)]);
+    }
+    wasSpooked = spooked;
+    if (spooked && show && show.phase !== 'out') release();
+
+    // ⛔⛔ WRAP BOOKKEEPING RUNS FIRST, ALWAYS, EVEN WHEN SOMETHING ELSE OWNS
+    // HIM. The O routine and the dash both return early, and while they did so
+    // zWatch went stale - so the first frame he was back on the reef, the
+    // watcher compared a band's current z against one from several seconds ago,
+    // decided it had just wrapped, and re-seated him on a random garden. A
+    // 60-unit sideways hop immediately after an otherwise continuous swim.
+    //
+    // Recording z every frame and only ACTING on it when he is free is what
+    // keeps the two in step.
+    const reef0 = getReef && getReef();
+    const wrapped = [];
+    for (const b of (reef0 && reef0.bands) || []) {
+      const prev = zWatch.get(b);
+      const z = b.position.z;
+      zWatch.set(b, z);
+      if (prev !== undefined && z < prev - 1) wrapped.push(b);
+    }
+
+    // ⭐ The O routine OWNS him while it runs - no band watching, no scurrying,
+    // no camouflage drift. Returning early is what keeps the two behaviours
+    // from fighting over his position every frame.
+    if (show) {
+      // Chameleon still eases, so he can flush back to his own colours on the
+      // way in, but everything else is the routine's.
+      blendT += dt;
+      blend += (blendTo - blend) * Math.min(1, dt * 2.2);
+      flush = Math.max(0, flush - dt * 1.3);
+      paint();
+      // ⛔ RETURN EVEN ON THE FRAME IT FINISHES. Falling through meant the
+      // band-wrap watcher below ran in the same frame he was re-seated on the
+      // reef - and if that band had just recycled, it seated him a SECOND time
+      // on a different garden, 67 units sideways in one frame. Exactly the
+      // teleport this whole mechanism exists to remove.
+      stepShow(t, dt);
+      return;
+    }
+
+    // The dash back to the far reef. Same deal - it owns him while it runs,
+    // and it returns on its completion frame too, for the same reason.
+    if (migrate) {
+      blend += (blendTo - blend) * Math.min(1, dt * 2.2);
+      flush = Math.max(0, flush - dt * 1.3);
+      paint();
+      stepMigrate(t, dt);
+      return;
+    }
+
+    const reef = getReef && getReef();
+    const bands = (reef && reef.bands) || [];
+
+    // ⭐ Leave BEFORE the garden is overtaken, and swim for it. See MIGRATE_AT.
+    if (band && band.position.z > MIGRATE_AT) {
+      startMigration();
+      if (migrate) return;
+    }
 
     // ---- wrap watching ----------------------------------------------------
     // A band that has just jumped backward is at the far end of the reef, which
     // is the ONLY place this creature is allowed to appear. Anywhere else and it
     // would materialise in open view - the same mistake the shark pass had to
     // be fixed for.
-    for (const b of bands) {
-      const prev = zWatch.get(b);
-      const z = b.position.z;
-      zWatch.set(b, z);
-      if (prev === undefined) continue;
-      const wrapped = z < prev - 1;           // only a recycle moves z backward
-      if (!wrapped) continue;
+    for (const b of wrapped) {
       if (b === band) {
-        // Our own garden has gone round. The pass is over.
-        retire();
-      } else if (!band && Math.random() < APPEAR_CHANCE) {
+        // Normally unreachable: he leaves at MIGRATE_AT, well before his band
+        // reaches the recycle point. This is the backstop for the case where
+        // something held him on past it - take a different garden on the same
+        // band rather than riding it round.
+        settleOn(b);
+      } else if (!band && !migrate) {
+        // Not attached at all (startup, or he has just finished an O routine).
+        // Take the first band that comes round, so he is never away for long.
         settleOn(b);
       }
     }
@@ -269,6 +852,34 @@ export function createReefOctopus(scene, creatures, getReef) {
     if (!band || !anchor) return;
 
     const m = reduced ? 0.35 : 1;
+
+    // ---- fear -------------------------------------------------------------
+    // ⭐ A shark overhead and he does what a real octopus does: stops dead and
+    // goes the colour of the rock. No darting about - movement is what gets you
+    // seen, and an animal that keeps scurrying while a predator passes reads as
+    // oblivious rather than as hiding.
+    if (spooked) {
+      mode = 'rest';
+      modeT = 0;
+      modeDur = 1;                     // nothing new will start while frozen
+      to.copy(at);
+      // Press flat against the coral and go hard into camouflage.
+      blendTo = 0.98;
+      blendDur = 0.9;
+      flush = 0;                       // no bright flush - that is the opposite
+      at.y += (-1.6 - at.y) * Math.min(1, dt * 1.6);
+      holder.position.set(anchor.x + at.x, anchor.y + at.y, anchor.z + at.z);
+      // Hunkered: squat down and pull the arms IN, the reverse of the dash.
+      const crouch = 1 - 0.14;
+      holder.scale.set(SCALE / Math.sqrt(crouch), SCALE * crouch, SCALE / Math.sqrt(crouch));
+      if (mixer) mixer.timeScale = 0.35;        // barely breathing
+      armSweep(-0.34);
+      blendT += dt;
+      blend += (blendTo - blend) * Math.min(1, dt * 2.0);
+      paint();
+      return;
+    }
+    holder.scale.setScalar(SCALE);
 
     // ---- locomotion -------------------------------------------------------
     modeT += dt;
@@ -342,26 +953,7 @@ export function createReefOctopus(scene, creatures, getReef) {
     blend += (blendTo - blend) * Math.min(1, dt * (1.2 + 2.4 * (1 - bk)));
 
     flush = Math.max(0, flush - dt * 1.3);
-    const shown = THREE.MathUtils.clamp(blend - flush * 0.55, 0, 1);
-
-    // Every skin material shifts from ITS OWN base colour toward the chosen
-    // coral tone. Starting from each material's own colour rather than from one
-    // shared constant matters: the model is painted in several related mauves,
-    // and flattening them all to a single colour would throw away the shading
-    // the artist built in and leave a plastic silhouette.
-    body.skin.forEach((m, i) => {
-      m.color.copy(body.base[i]).lerp(tone, shown);
-      // Camouflaged skin also goes matte - a blended octopus still carrying a
-      // wet highlight gives itself away immediately.
-      if (m.roughness !== undefined) m.roughness = 0.55 + shown * 0.3;
-    });
-    // The suckers and eye whites dim toward the body but never all the way: a
-    // perfectly camouflaged octopus is an invisible one, and SPOTTING it is the
-    // game. Real cephalopods keep the pupil dark through a colour change, so
-    // `body.keep` is deliberately never touched.
-    body.trim.forEach((m, i) => {
-      m.color.copy(body.trimBase[i]).lerp(tone, shown * 0.7);
-    });
+    paint();
   }
 
   function dispose() {
@@ -386,14 +978,44 @@ export function createReefOctopus(scene, creatures, getReef) {
     return settleOn(far) ? 'octopus on band z=' + far.position.z.toFixed(1) : 'no cluster';
   }
 
+  // On the reef from the very first frame rather than after the first wrap.
+  settleFar();
+
   return {
-    update, dispose, debugShow,
+    update, dispose, debugShow, admire, release, isAdmiring,
+    /**
+     * Where a puff of ink should come out, in WORLD space, or null if he is
+     * somehow not in the scene. Slightly below and in front of the mantle -
+     * ink leaves through the siphon, under the body, not out of the top of the
+     * head. Returns the live Vector3's values, not the rounded ones `state`
+     * reports, because this feeds a particle position.
+     */
+    inkOrigin() {
+      if (!holder.visible) return null;
+      const w = holder.getWorldPosition(new THREE.Vector3());
+      if (!Number.isFinite(w.x)) return null;
+      // Scaled off SCALE so it stays under him whatever size he is.
+      return { x: w.x, y: w.y - SCALE * 0.45, z: w.z + SCALE * 0.6,
+               r: SCALE * 1.15 };
+    },
     /**
      * Null while it is away between passes - that is the normal resting state.
      * The position is the WORLD position, composed through the band it is
      * riding, which is the only number that answers "is it actually on screen".
      */
     get state() {
+      // ⛔ `band` alone is NOT "is he here". He is off-band and plainly on
+      // screen during both the dash back to the far reef and the O routine, and
+      // reporting null for those made a test conclude he was absent 5.7% of the
+      // time when he was in fact swimming across the frame.
+      if (migrate || show) {
+        const w = holder.getWorldPosition(new THREE.Vector3());
+        return {
+          mode: migrate ? 'migrate' : ('admire:' + show.phase),
+          blend: +blend.toFixed(2),
+          x: +w.x.toFixed(1), y: +w.y.toFixed(1), z: +w.z.toFixed(1),
+        };
+      }
       if (!band) return null;
       // ⛔ getWorldPosition, NOT matrixWorld. Reading matrixWorld gives whatever
       // the last render left there, and the band this is parented to is only

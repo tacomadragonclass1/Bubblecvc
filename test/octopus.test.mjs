@@ -59,10 +59,14 @@ const scene = new THREE.Scene();
 let reef = fakeReef();
 const octo = createReefOctopus(scene, fakeCreatures(), () => reef);
 
-console.log('\n1. it stays away until a band wraps, then appears');
+console.log('\n1. he LIVES on the reef - present, scurrying, camouflaging');
 {
   octo.update(0, 0.016, {});
-  ok('absent on the first frame', octo.state === null);
+  // ⛔ CHANGED DELIBERATELY. He used to be a sporadic visitor on an appearance
+  // lottery; he is now a permanent resident, because once the letter O calls
+  // him forward "is he around?" stops being interesting and becomes a reason
+  // the trick sometimes does not fire.
+  ok('on the reef from the very first frame', octo.state !== null);
   // Run long enough for several band wraps (a full cycle is SPAN/TRAVEL ~57s).
   let t = 0, appearances = 0, wasOut = true;
   const seenModes = new Set(), blends = [];
@@ -75,11 +79,12 @@ console.log('\n1. it stays away until a band wraps, then appears');
     if (st) {
       if (wasOut) { appearances++; wasOut = false; }
       seenModes.add(st.mode); blends.push(st.blend);
-      depths.push(st.z); depthsWithY.push([st.z, st.y]);
+      depths.push(st.z); depthsWithY.push([st.z, st.y, st.mode]);
     } else wasOut = true;
   }
-  ok('it appeared more than once over 16 min', appearances > 1, 'appearances=' + appearances);
-  ok('it also went AWAY between passes (sporadic)', appearances > 1 && wasOut !== undefined);
+  ok('never goes away over 16 min', appearances === 1,
+     'left and returned ' + (appearances - 1) + ' time(s)');
+  ok('and stays attached the whole time', !wasOut);
   ok('it rested, crawled AND jetted', seenModes.has('rest') && seenModes.has('crawl') && seenModes.has('jet'),
      [...seenModes].join(','));
   const lo = Math.min(...blends), hi = Math.max(...blends);
@@ -99,9 +104,14 @@ console.log('\n1. it stays away until a band wraps, then appears');
   // fraction of the visible half-height at its own depth) the bubble row sits
   // at about +0.34 and the dice bay at -0.42, so anything staying below -0.25
   // is clear of both by a wide margin and can never occlude a letter.
-  const worstScreenY = Math.max(...depthsWithY.map(
-    ([z, y]) => y / (Math.tan(22.5 * Math.PI / 180) * (26 - z))));
-  ok('it never rises into the part of the screen the lesson uses',
+  // ⛔ REEF BEHAVIOUR ONLY. The O routine deliberately brings him up under the
+  // middle bubble - that is the whole feature - so including those frames here
+  // would assert against something the app is supposed to do. This covers the
+  // state he is in for all but a few seconds at a time.
+  const worstScreenY = Math.max(...depthsWithY
+    .filter(d => d[2] !== 'migrate' && !String(d[2]).startsWith('admire'))
+    .map(([z, y]) => y / (Math.tan(22.5 * Math.PI / 180) * (26 - z))));
+  ok('while on the reef he never rises into the lesson area',
      worstScreenY < -0.25, 'highest screen y=' + worstScreenY.toFixed(2) + ' (bubbles sit at +0.34)');
 }
 
