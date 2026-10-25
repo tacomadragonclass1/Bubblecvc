@@ -150,7 +150,10 @@ function init() {
     shark = createSharkPass(scene, creatures);
     // ⛔ Handed a GETTER, not `reef`. A resize disposes and rebuilds the reef,
     // and a stored reference would leave the octopus parented to a dead band.
-    octopus = createReefOctopus(scene, creatures, () => reef);
+    // ⛔ Both arguments are GETTERS, not values. A resize disposes and rebuilds
+    // the reef, and relayout() moves the bubble row - a stored reference would
+    // leave him parented to a dead band or hanging where the row used to be.
+    octopus = createReefOctopus(scene, creatures, () => reef, vowelBubbleLayout);
     // The models can finish loading after a lesson has already started.
     if (shark && running) shark.reschedule(clock.elapsed);
     console.info('[bubblecvc] modelled creatures loaded:', lib.count, lib.kinds.join(', '));
@@ -259,6 +262,17 @@ function buildBay() {
     scene.add(die);
     dice.push(die);
   }
+}
+
+/**
+ * Where the vowel bubble sits, straight from the LAYOUT rather than from the
+ * live mesh. The mesh bobs on its buoyancy curve and anything that followed it
+ * would bob too; the layout is the still position. Read as a getter so a
+ * resize is picked up without anyone having to re-register.
+ */
+function vowelBubbleLayout() {
+  const row = layoutFor(SLOTS, bounds, bubbleY);
+  return row[Math.min(1, row.length - 1)];
 }
 
 function relayout() {
@@ -573,7 +587,7 @@ function frame() {
             // around the letter itself, which made it look like the `i` was
             // leaking: the joke only works if the ink has an animal attached to
             // it. He may be far out on the reef, in which case it is a small
-            // puff in the distance, or right under the middle bubble doing the
+            // puff in the distance, or up over the middle bubble doing the
             // O routine, in which case it is a proper cloud - perspective sizes
             // it correctly either way with no special casing.
             if (ink && u.ch === 'i' && octopus) {

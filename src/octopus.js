@@ -131,27 +131,67 @@ const ARM_SWEEP = 0.95;
 // ⭐ Spell an O into the vowel bubble and the octopus comes to look at it.
 //
 // An octopus begins with O, so the letter is his. He leaves the reef, swims
-// toward the camera, parks under the middle bubble and tips his head back to
-// stare up at the letter until the word is finished.
+// toward the camera, hangs OVER the middle bubble with his arms trailing down
+// around it, and tips his head forward to peer down at the letter until the
+// word is finished.
 //
 // ⛔ HE STOPS BEHIND THE PLAY PLANE, NOT IN FRONT OF IT. The hero shark passes
 // in front of the bubbles and that is right for a two-second event, but this
-// one HOLDS for as long as a child takes to finish a word. There is only 4.1
-// units of clear space between the bottom of the bubble row (y -0.4) and the
-// top of the dice bay (y -4.5), so a creature big enough to read cannot fit
-// between them. At z -8 he is 32% of screen height - unmistakably big - and
-// every die and bubble still draws in front of him, so nothing a child needs
-// to read is ever occluded.
-const ADMIRE_POS = new THREE.Vector3(0, -2.8, -8);
-// Tipped back to look UP. rotation.y 0 already faces the camera (the reef
-// heading maths uses atan2(dx, dz), so zero is +Z), and a positive x rotation
-// tips his top toward the camera, which reads as a head tilting back.
+// one HOLDS for as long as a child takes to finish a word. z -8 keeps every
+// die and every bubble drawing in front of him, so nothing a child needs to
+// read is ever occluded - and because the bubble film is transparent, the
+// parts of him the die does not cover still read straight through it. That
+// combination is the whole look: the letter sits crisply in front, and he is
+// visible behind it through the soap.
 //
-// ⛔ 0.62 is near the ceiling, not a midpoint. At 1.05 the mantle rolls over
-// the top of the face and HIDES both eyes - he reads as turning away rather
-// than looking up. The eyes are the whole point of the pose, so the tilt is
-// capped at whatever still shows them.
-const ADMIRE_PITCH = 0.62;
+// ⭐ HE HANGS ABOVE THE BUBBLE AND LOOKS DOWN INTO IT. He used to park BELOW
+// the row and tip back to look up, which put the whole animal in the one strip
+// of empty water the board has (bubble row bottom y -0.4, dice bay top y -4.5)
+// and left him squatting on the reef. Coming over the top instead reads as an
+// animal leaning in over something it is curious about, and it uses the open
+// water above the row rather than the cramped gap below it.
+//
+// ⛔ y IS NOT COMPARABLE ACROSS DEPTHS - see frustum.js. The play plane's half
+// height is 10.77 but at z -8 it is 14.08, so the bubble's top edge (world y
+// 7.7 at z 0) sits at the SAME SCREEN HEIGHT as y 10.1 back where he is. His
+// eyes have to clear that number, not 7.7, or he looks level with the letter
+// rather than above it. His eyes ride about a unit above his origin and his
+// mantle about four and a half above it, so an origin near 9 puts the eyes
+// just over the rim and the top of the head at the very top of frame.
+//
+// ⭐ The head running off the top is FINE and is deliberate. What matters is
+// that the eyes and the letter are both in shot.
+export const ADMIRE_Z = -8;
+// The camera sits at z 26 and never moves, so the frustum where he hangs is
+// this much bigger than at the play plane. Multiplying a play-plane y by it
+// gives the y at HIS depth that lands on the same screen height.
+const ADMIRE_DEPTH_GAIN = (26 - ADMIRE_Z) / 26;
+// ⭐ MEASURED off the live model in the admire pose, not derived - the pitch
+// swings both of these, so they are only valid for ADMIRE_PITCH. If that
+// changes, re-measure rather than reasoning about it: his eyes ride this far
+// above his own origin, and his mantle 4.75, and his arms hang 4.47 below.
+export const ADMIRE_EYE_RISE = 2.81;
+// How far his eyes clear the bubble's top rim, in units at his depth. This is
+// the number that actually sets the composition - it is the gap between the
+// top of the soap and the animal peering over it.
+export const ADMIRE_EYE_CLEAR = 1.7;
+// ⛔ DERIVED FROM THE BUBBLE, NOT A FIXED y. The bubble row is laid out from
+// the viewport: `bubbleY` is 0.34 of the half-height in landscape but 0.14 in
+// portrait, and the radius shrinks on a narrow screen. A hardcoded y looked
+// right on the development window and would have left him stranded in open
+// water well above a portrait board. Fed from the LAYOUT, not from the live
+// mesh - the mesh bobs, and he must not bob with it.
+// Tipped FORWARD to look DOWN. rotation.y 0 already faces the camera (the reef
+// heading maths uses atan2(dx, dz), so zero is +Z); a positive x rotation tips
+// his top toward the camera and reads as a head tilting back, so the sign is
+// negative here - his top goes away from the camera and his face comes down.
+//
+// ⛔ There is a ceiling on this in both directions, and it is the same one:
+// past a certain tilt the mantle rolls over the face and hides both eyes, and
+// he reads as turning away rather than as looking. The eyes are the entire
+// point of the pose. Judge any change to this number by whether both eyes are
+// still visible AT THE GAME CAMERA, never from a close-up.
+const ADMIRE_PITCH = -0.5;
 // He is much closer than his reef perch, so he needs LESS scale, not more -
 // perspective is already doing the work of making him big.
 const ADMIRE_SCALE = 0.62;
@@ -215,7 +255,17 @@ function adoptModel(creatures) {
  *                  which would leave us holding a dead band. Looking it up each
  *                  frame means a rebuild just ends the current pass.
  */
-export function createReefOctopus(scene, creatures, getReef) {
+export function createReefOctopus(scene, creatures, getReef, getVowelBubble) {
+  // Reused, never reallocated - this runs every frame of the hold.
+  const admireTarget = new THREE.Vector3(0, 9, ADMIRE_Z);
+  /** Where he hangs to look at the letter. See the ADMIRE_* notes above. */
+  function admirePos() {
+    const b = getVowelBubble && getVowelBubble();
+    if (!b || !Number.isFinite(b.y) || !Number.isFinite(b.r)) return admireTarget;
+    const rim = (b.y + b.r) * ADMIRE_DEPTH_GAIN;
+    return admireTarget.set(b.x || 0, rim + ADMIRE_EYE_CLEAR - ADMIRE_EYE_RISE, ADMIRE_Z);
+  }
+
   const body = adoptModel(creatures);
   if (!body) {
     // Fail soft and silent, exactly like the rest of the creature pipeline.
@@ -600,7 +650,7 @@ export function createReefOctopus(scene, creatures, getReef) {
     // very back of the reef or from a garden that is nearly out of frame, and a
     // fixed duration makes the far trip a panicked dash and the near one a
     // crawl. Clamped at both ends so it never looks teleported or glacial.
-    const dist = from.distanceTo(ADMIRE_POS);
+    const dist = from.distanceTo(admirePos());
     const dur = THREE.MathUtils.clamp(dist / ADMIRE_SPEED, ADMIRE_IN_MIN, ADMIRE_IN_MAX);
     show = { phase: 'in', t: 0, from: from.clone(), dur };
     // Arrive in his own colours. Camouflage is for hiding on the reef; this is
@@ -665,7 +715,8 @@ export function createReefOctopus(scene, creatures, getReef) {
       // treading water and looking rather than as a pasted-on sprite.
       const bob = Math.sin(t * 0.9) * 0.22;
       const sway = Math.sin(t * 0.61) * 0.5;
-      holder.position.set(ADMIRE_POS.x + sway, ADMIRE_POS.y + bob, ADMIRE_POS.z);
+      const at = admirePos();
+      holder.position.set(at.x + sway, at.y + bob, at.z);
       holder.rotation.set(ADMIRE_PITCH + Math.sin(t * 0.77) * 0.045,
                           Math.sin(t * 0.43) * 0.19, Math.sin(t * 0.55) * 0.05);
       holder.scale.setScalar(SCALE * ADMIRE_SCALE);
@@ -678,7 +729,7 @@ export function createReefOctopus(scene, creatures, getReef) {
       // speed, which is exactly the "yanked on a string" look - he has to push
       // off gently, cross, and settle. smootherstep does all three.
       const e = k * k * k * (k * (k * 6 - 15) + 10);
-      holder.position.lerpVectors(show.from, ADMIRE_POS, e);
+      holder.position.lerpVectors(show.from, admirePos(), e);
       holder.rotation.set(ADMIRE_PITCH * e, 0, 0);
       // Grow from his reef size to his close-up size along the way.
       holder.scale.setScalar(SCALE * (1 + (ADMIRE_SCALE - 1) * e));
