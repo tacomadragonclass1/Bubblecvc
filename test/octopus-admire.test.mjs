@@ -120,10 +120,14 @@ console.log('\n7. he hangs ABOVE the bubble, and follows it when the layout move
   // A play-plane y and the y at his depth that lands on the same screen height.
   const atHisDepth = y => y * (CAM_Z - OCTO_Z) / CAM_Z;
 
+  // ⚠️ Long enough that BOTH are parked. The approach is distance-based and
+  // the two targets are at different heights, so a short run can leave one
+  // still arriving - and an arriving octopus has no hover on him yet, which
+  // shows up as a spurious clearance difference between the two layouts.
   const park = bubble => {
     const reef=fakeReef();
     const o=createReefOctopus(new THREE.Scene(), fake, ()=>reef, ()=>bubble);
-    o.admire(); run(o,reef,10);
+    o.admire(); run(o,reef,14);
     return o.state;
   };
 
