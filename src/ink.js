@@ -1,13 +1,31 @@
 // --------------------------------------------------------------------- ink
-// A small puff of octopus ink. Fired when an `i` lands in a bubble, purely as
-// an easter egg - i for ink, and the octopus is the one who owns the joke.
+// A puff of octopus ink. Fired when an `i` lands in a bubble, purely as an
+// easter egg - i for ink, and the octopus is the one who owns the joke.
 //
-// ⛔ IT IS DELIBERATELY SMALL AND SHORT. The temptation with ink is to make it
-// a dramatic billowing cloud, and that is exactly wrong here: this fires in the
-// middle of a phonics drill, over the top of the letter a child is reading, and
-// anything that obscures the board or outlasts the moment stops being a treat
-// and becomes an obstacle. Radius stays near the die, the whole thing is over
-// in well under two seconds, and it never reaches the neighbouring bubbles.
+// ⛔⛔ THE INK IS TIED TO THE OCTOPUS. It disperses FROM him, on whatever plane
+// he happens to be on. The letter is only the TRIGGER. An early version puffed
+// the cloud around the letter itself and it read as the `i` leaking - the joke
+// only works if the ink has an animal attached to it. The origin is always
+// `octopus.inkOrigin()`: far out on the reef it is a small puff in the
+// distance, up near the bubbles it is a proper cloud, and perspective sizes it
+// either way with no special casing. ⛔ Do not relocate the puff to make it
+// more visible. If it needs to read better at depth, change its SIZE.
+//
+// ⛔ IT IS DELIBERATELY SHORT. The temptation with ink is to make it a dramatic
+// billowing cloud, and the DURATION side of that is still wrong here: this
+// fires in the middle of a phonics drill, over the top of the letter a child is
+// reading, and anything that outlasts the moment stops being a treat and
+// becomes an obstacle. The whole thing is over in well under two seconds.
+//
+// ⛔⛔ BUT IT IS NO LONGER SMALL, AND THAT WAS A CORRECTION FROM USE.
+// The original was sized to stay near the die and never reach a neighbouring
+// bubble. In the classroom it did not READ - reported as "it doesn't always
+// read" - and it was taken up 50%. The reason the first judgement was wrong is
+// a scale the file could not see: the puff plays at whatever distance the
+// octopus happens to be, and most of the time he is out on the reef, where
+// perspective had already shrunk a cloud that was only just big enough at the
+// bubble. ⛔ Do not shrink it back on the grounds of the paragraph above - the
+// constraint that mattered turned out to be TIME, not size.
 //
 // Built as ONE pooled Points cloud, like src/pop.js - no allocation during a
 // lesson, one draw call, and it can simply be left in the scene when idle.
@@ -16,6 +34,13 @@ import * as THREE from '../vendor/three.module.js';
 
 const PUFFS = 3;        // at most this many clouds in flight at once
 const GRAINS = 34;      // particles per cloud - enough to read as a cloud
+
+// ⭐ Taken up 50% after classroom use. Applied as ONE factor on the incoming
+// radius rather than to each of the four places a size is derived, so cluster
+// width, spread velocity and grain size all grow together - a cloud 1.5x wider
+// made of grains 1.5x wider covers the same FRACTION of itself, so it gets
+// bigger without getting sparse.
+const SCALE = 1.5;
 
 const inkVert = /* glsl */`
   attribute float aSeed;
@@ -102,6 +127,7 @@ export function createInk(scene) {
 
   /** Puff of ink at a world position. `r` scales it to the thing it came from. */
   function puff(x, y, r = 1, z = 0) {
+    r *= SCALE;
     const s = slots.find(s => s.t < 0) || slots[0];
     s.t = 0;
     s.pts.visible = true;

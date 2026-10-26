@@ -996,6 +996,52 @@ a cluster — a solid mass, a horizontal, a vertical rhythm, a fractal and a fla
 net — and hot pink is still rationed to the branching coral, which now appears
 in only some clusters. One focal point per stretch of reef, not a row of them.
 
+## The octopus's ink (`src/ink.js`)
+
+⛔⛔ **THE INK IS TIED TO THE OCTOPUS. It disperses FROM him, on whatever plane
+he happens to be on.** An `i` landing in a bubble is only the TRIGGER — *i for
+ink* — and the joke exists because the cloud has an animal attached to it. An
+early version puffed it around the letter instead and it read as the `i`
+leaking. The origin is `octopus.inkOrigin()` and it is not negotiable: if he is
+far out on the reef it is a small puff in the distance, and that is correct.
+
+**It is deliberately SHORT and no longer deliberately small.** The original was
+sized to stay near the die and never reach a neighbouring bubble. In the
+classroom it did not read, and it was taken up 50% — one `SCALE` factor applied
+to the incoming radius, so cluster width, spread velocity and grain size all
+grow together. A cloud 1.5× wider made of grains 1.5× wider covers the same
+*fraction* of itself, so it gets bigger without getting sparse. ⛔ The
+constraint that actually mattered turned out to be **time**, not size; do not
+shrink it back.
+
+### ❗ Size is not the whole reason it does not read
+
+Measured while making the change above, and not yet fixed:
+
+- **The puff is essentially always at reef depth.** The "proper cloud up at the
+  bubble" case the code comments describe needs the octopus in the foreground,
+  which only happens when an **`o`** is in the vowel bubble — the same slot the
+  **`i`** has to occupy to fire the ink. The two conditions are mutually
+  exclusive on a three-slot board, so the near-distance cloud essentially never
+  plays. Perspective then shrinks the far one by about 6×.
+- **At that depth it is depth-culled.** A/B with everything else held identical:
+  with `depthTest` on, the puff at the octopus's own position was *completely
+  invisible*; with it off, it appeared. Reef geometry and the bay dice are in
+  front of it.
+
+⛔ **Neither of these may be fixed by moving the puff.** The origin is the
+octopus, full stop. The levers that stay inside that rule are:
+
+- **Compensate the radius for depth**, so a puff reads at the same size on
+  screen wherever he is — it still comes out of him, it is just not thrown away
+  by perspective. `r *= (CAM_Z - z) / CAM_Z` is the whole change.
+- **Let it draw over the reef.** It is already `depthWrite: false` with
+  `renderOrder` 22; the remaining question is whether depth *testing* should be
+  off too, so a cloud coming out of a visible octopus is not eaten by the coral
+  he is sitting in.
+
+⚠️ Left alone deliberately — these are art-direction calls, not bugs.
+
 ## Not built yet
 
 - **Advanced mode** — CCVC / CVCC. Bubble count is already data-driven

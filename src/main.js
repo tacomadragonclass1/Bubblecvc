@@ -657,8 +657,9 @@ function frame() {
           if (P.stepCapture(die, dt)) {
             fillBubble(u.capBubble, die);
             A.playPhoneme(u.ch);
-            // ⭐ i is for ink - and the ink comes out of the OCTOPUS, wherever
-            // he happens to be. The letter is only the trigger.
+            // ⭐⭐ i is for ink - and the ink comes out of the OCTOPUS, on
+            // whatever plane he happens to be on. The letter is only the
+            // trigger. ⛔ This origin is not negotiable; see src/ink.js.
             //
             // ⛔ Not fired at the bubble. An earlier version puffed the cloud
             // around the letter itself, which made it look like the `i` was
