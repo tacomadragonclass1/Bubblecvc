@@ -48,16 +48,28 @@ export function launch(die, vx, vy) {
  * @returns null | {type:'captured', bubble} | {type:'missed'} | {type:'wall', speed}
  */
 export function stepFlight(die, dt, ctx) {
-  const { bounds, bayTop, bubbles, targetSlot } = ctx;
+  const { bounds, bayTop, bubbles, targetRole } = ctx;
   const u = die.userData;
   const p = die.position;
   const v = u.vel;
 
   u.flightT += dt;
 
-  // Magnet toward the slot this letter is destined for. Only the target slot
-  // pulls - a `c` drifting past the vowel bubble must not be swallowed by it.
-  const target = bubbles.find(b => b.index === targetSlot && canAccept(b));
+  // Magnet toward the slot this letter is destined for. Only slots of the
+  // die's own ROLE pull - a `c` drifting past the vowel bubble must not be
+  // swallowed by it.
+  //
+  // ⭐ ROLE, NOT INDEX, and that is what makes blends work. On a plain CVC
+  // board there is exactly one slot per role and this is the old behaviour
+  // exactly. Once a teacher summons a blend bubble there are two onset slots,
+  // both fed by the onset bay, and the die goes to whichever of them it was
+  // AIMED at - the NEAREST one that can still accept it.
+  //
+  // ⛔ Deliberately not "the leftmost empty one". Choosing for the child would
+  // make `s` and `t` land in a fixed order however they were thrown, and this
+  // board has always been built so that aim matters a little and fill order is
+  // free. A letter in the wrong half of a blend is one tap to undo.
+  const target = nearestSlot(bubbles, targetRole, p);
   let event = null;
 
   if (target) {
@@ -111,6 +123,18 @@ export function stepFlight(die, dt, ctx) {
     return { type: 'missed' };
   }
   return event;
+}
+
+/** The acceptable slot of this role closest to `p`, or null if none can take it. */
+function nearestSlot(bubbles, role, p) {
+  let best = null, bestD = Infinity;
+  for (const b of bubbles) {
+    if (b.role !== role || !canAccept(b)) continue;
+    const dx = b.pos.x - p.x, dy = b.pos.y - p.y;
+    const d = dx * dx + dy * dy;
+    if (d < bestD) { best = b; bestD = d; }
+  }
+  return best;
 }
 
 /** Begin the trip home. Eased, and slow enough to watch - it is not a punishment. */

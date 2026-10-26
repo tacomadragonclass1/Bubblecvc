@@ -281,6 +281,58 @@ export function sfxSplit() {
   o.stop(t0 + 0.24);
 }
 
+/**
+ * A new bubble arriving out of the water. ⭐ Rising and soft-edged, the exact
+ * opposite shape of sfxPop() - a bubble forming is the inverse of one bursting,
+ * and the ear reads that immediately without being taught.
+ */
+export function sfxSummon() {
+  initAudio();
+  const t0 = ctx.currentTime;
+  const o = ctx.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(220, t0);
+  o.frequency.exponentialRampToValueAtTime(760, t0 + 0.17);
+  const g = ctx.createGain();
+  env(g, t0, 0.22, 0.03, 0.2);
+  o.connect(g).connect(master);
+  o.start(t0);
+  o.stop(t0 + 0.3);
+  // A small intake of water behind it, band-passed so it stays a gurgle rather
+  // than a hiss - this fires beside a word being read, not over it.
+  const n = ctx.createBufferSource();
+  n.buffer = noiseBuffer(0.22);
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.setValueAtTime(600, t0);
+  bp.frequency.exponentialRampToValueAtTime(1900, t0 + 0.18);
+  bp.Q.value = 1.4;
+  const ng = ctx.createGain();
+  env(ng, t0, 0.1, 0.02, 0.18);
+  n.connect(bp).connect(ng).connect(master);
+  n.start(t0);
+  n.stop(t0 + 0.26);
+}
+
+/**
+ * A summoned bubble dismissed. ⛔ Deliberately NOT the pop: nothing burst, and
+ * a teacher tidying the board away must not hear the same sound as a letter
+ * being released. A short descending sigh - it sinks rather than breaks.
+ */
+export function sfxDismiss() {
+  initAudio();
+  const t0 = ctx.currentTime;
+  const o = ctx.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(520, t0);
+  o.frequency.exponentialRampToValueAtTime(170, t0 + 0.2);
+  const g = ctx.createGain();
+  env(g, t0, 0.17, 0.015, 0.21);
+  o.connect(g).connect(master);
+  o.start(t0);
+  o.stop(t0 + 0.3);
+}
+
 export function sfxMiss() {
   initAudio();
   const t0 = ctx.currentTime;

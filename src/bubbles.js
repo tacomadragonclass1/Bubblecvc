@@ -64,11 +64,19 @@ const bubbleVert = /* glsl */`
   // put and the pattern turns inside it: identical to the old look on a single
   // bubble, and the only sane behaviour on a merged one.
   uniform vec2  uSpin;       // yaw, roll - applied to the PATTERN only
+  // ⭐ PER LOBE, not per film. The vowel bubble goes pink to stay findable
+  // once blend bubbles have pushed it out of the middle of the row - and the
+  // vowel may well be welded to its neighbours, in which case only ITS lobe
+  // should be dyed, not the whole membrane. Blended by the same weight as the
+  // normal, so the colour follows the lobe through the neck instead of
+  // stopping at a hard line.
+  uniform float uLobeTint[3];
 
   varying vec3 vNormalW;
   varying vec3 vViewW;
   varying vec3 vPosL;
   varying vec2 vUv;
+  varying float vTint;
 
   // Smooth maximum. The interpolation weight comes back alongside the value so
   // the normal can be blended by exactly the same amount - that is what keeps
@@ -92,6 +100,7 @@ const bubbleVert = /* glsl */`
 
     float R = 0.0;
     vec3 N = d;
+    float tint = 0.0;
     for (int i = 0; i < 3; i++) {
       // Guarded rather than an early break: a constant loop bound with no exit
       // is the shape GLSL ES 1.0 is happiest with on weak drivers.
@@ -103,15 +112,17 @@ const bubbleVert = /* glsl */`
         // nothing instead of pulling the surface inside out.
         float ti = disc >= 0.0 ? max(0.0, b + sqrt(disc)) : 0.0;
         vec3 ni = normalize(d * ti - c);
-        if (i == 0) { R = ti; N = ni; }
+        if (i == 0) { R = ti; N = ni; tint = uLobeTint[0]; }
         else {
           vec2 s = smaxW(R, ti, uNeck[i]);
           R = s.x;
           N = normalize(mix(N, ni, s.y));
+          tint = mix(tint, uLobeTint[i], s.y);
         }
       }
     }
 
+    vTint = tint;
     vec3 p = d * R;
     vec4 wp = modelMatrix * vec4(p, 1.0);
     vNormalW = normalize(mat3(modelMatrix) * N);
@@ -136,6 +147,7 @@ const bubbleFrag = /* glsl */`
   varying vec3 vViewW;
   varying vec3 vPosL;
   varying vec2 vUv;
+  varying float vTint;
 
   uniform float uTime;
   uniform float uPop;       // 0 = whole, 1 = ruptured
@@ -229,12 +241,29 @@ const bubbleFrag = /* glsl */`
     // enough to compete with the letter it is holding.
     col += uTint * uFill * 0.05;
 
+    // ---- the vowel dye -----------------------------------------------------
+    // ⭐ A DYED FILM, not a pink object. The bubble still has to be a soap
+    // bubble - so the interference bands are kept and seen THROUGH the dye
+    // rather than replaced by a flat colour. Desaturating a little first is
+    // what stops the dye fighting the bands: full-strength interference times
+    // magenta gives lurid stripes, not tinted soap.
+    if (vTint > 0.0) {
+      vec3 dye = vec3(1.0, 0.30, 0.60);
+      float lum = dot(col, vec3(0.299, 0.587, 0.114));
+      vec3 dyed = mix(col, vec3(lum), 0.45) * dye * 2.05;
+      col = mix(col, dyed, vTint);
+    }
+
     // ---- alpha -------------------------------------------------------------
     // Transparent in the middle, opaque-ish at the silhouette, plus whatever the
     // highlights contribute. This single line is the difference between soap
     // film and a plastic ball.
     float alpha = fres * 0.72 + rim * 0.46 + spec1 * 0.45 + spec2 * 0.85 + 0.02;
     alpha *= 1.0 - uFill * 0.07;
+    // Dye makes a film slightly more present, which is the point - it has to be
+    // findable across a classroom - but only slightly, or the letter inside
+    // stops being the brightest thing in the bubble.
+    alpha *= 1.0 + vTint * 0.22;
 
     // ---- rupture -----------------------------------------------------------
     // The film does not fade uniformly; it tears. Holes open where the film was
@@ -350,136 +379,157 @@ let unitSphere = null;
  *               any such thing as a wide slot: width comes from welding
  *               neighbours together at run time, not from the layout.
  */
+/**
+ * Build one slot: its mesh, its material and its state. Pulled out of
+ * createBubbles because a board GROWS - a teacher summons a blend bubble
+ * mid-lesson - and a grown board must not be a rebuilt board. Rebuilding would
+ * throw away every die already in a bubble, every weld the teacher has made and
+ * every bubble's idle phase, so the row would visibly re-shuffle itself the
+ * moment a fourth bubble appeared.
+ */
+function makeBubble(group, slot, index) {
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: bubbleVert,
+    fragmentShader: bubbleFrag,
+    uniforms: {
+      uTime: { value: 0 },
+      uPop: { value: 0 },
+      uTension: { value: 0 },
+      uFill: { value: 0 },
+      uTint: { value: new THREE.Color(0.55, 0.85, 1.0) },
+      // ⛔ uLobes is a UNIFORM, never a #define. Welding changes how many
+      // lobes a film has several times in a lesson, and a #define would mean
+      // a fresh shader program - a visible compile stall on a classroom TV -
+      // every time a teacher dragged a finger. As a uniform the program is
+      // compiled once and reused for every film.
+      uLobe: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] },
+      uLobeR: { value: [1, 1, 1] },
+      uNeck: { value: [0, 0, 0] },
+      uLobeTint: { value: [0, 0, 0] },
+      uLobes: { value: 1 },
+      uSpin: { value: new THREE.Vector2() },
+    },
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.NormalBlending,
+  });
+
+  const r = slot.r || BUBBLE_R_MAX;
+  // ⭐ UNIT sphere, scaled by r. The radius has to be a SCALE, not baked into
+  // the geometry: on a window resize the layout recomputes a new radius, and
+  // a baked geometry cannot follow it. That bug shipped a portrait layout
+  // where the bubbles kept their landscape size and overlapped into a tangle.
+  //
+  // ⛔⛔ THE SPHERE'S POLES POINT ALONG X, AND THAT ONE LINE IS THE WHOLE
+  // FIX FOR THE FACETED NECK.
+  //
+  // This vertex shader displaces each direction by a DIFFERENT radius, so
+  // where the radius changes fastest the mesh needs its vertices. On a merged
+  // film the radius changes fastest across the FILLET - a cone of directions
+  // around the X axis, because the lobes are laid out along X and the peanut
+  // is therefore a surface of revolution about X.
+  //
+  // A stock SphereGeometry puts its poles at +Y and -Y and fans long thin
+  // triangles out of them, and those fans lie straight across that cone: the
+  // merged bubble grew a hard faceted ribbon over the top of its neck and a
+  // matching one underneath, at +Y and -Y and nowhere else. Rotating the
+  // geometry a quarter turn puts the poles on X instead, where the film is
+  // just a spherical cap and nothing is changing - and the latitude rings now
+  // run PARALLEL to the fillet, which is the best possible place for them.
+  //
+  // ⛔ Rotating the GEOMETRY is not the same as rotating the mesh and is safe
+  // where that is not: shading here is a function of direction alone, and
+  // this changes only which directions get a vertex, not what any direction
+  // looks like.
+  //
+  // ⭐ The segment counts are deliberately lopsided for the same reason.
+  // Latitude (across the fillet) is doubled to 96; longitude, which only goes
+  // round the axis of revolution where nothing varies, stays at 64.
+  //
+  // ❗ An icosahedron was tried first and is a trap: three.js subdivides a
+  // PolyhedronGeometry face into (detail+1)^2, not 4^detail, so detail 5 is
+  // 720 triangles and the bubble came back a visible dodecagon.
+  if (!unitSphere) unitSphere = new THREE.SphereGeometry(1, 64, 96).rotateZ(Math.PI / 2);
+  const mesh = new THREE.Mesh(unitSphere, mat);
+  mesh.position.set(slot.x, slot.y, 0);
+  mesh.renderOrder = 10;        // after the dice, so the film sits over them
+  mesh.scale.setScalar(r);
+  // ⛔ A merged film is a peanut up to three lobes long, and three.js culls a
+  // mesh against its GEOMETRY's bounding sphere - the unit sphere's, which
+  // knows nothing about the displacement the vertex shader applies. Left on,
+  // a wide merged bubble vanishes near the edge of frame.
+  mesh.frustumCulled = false;
+  group.add(mesh);
+
+  const b = {
+    index,
+    mesh,
+    mat,
+    r,
+    // ⭐ WHICH PART OF THE WORD this slot is, not where it is: 0 onset,
+    // 1 vowel, 2 coda. A blend board has several onset slots, so the bay can
+    // no longer address a slot by position - a die carries its ROLE and goes
+    // to whichever slot of that role it was aimed at. See physics.js.
+    role: slot.role === undefined ? 1 : slot.role,
+    // 0..1, drives the pink vowel dye. Set by the board, not by the bubble.
+    tint: 0,
+    // The slot's place in the LAYOUT - its position with nothing welded. Lobe
+    // positions are derived from this and the live weld state every frame.
+    base: new THREE.Vector3(slot.x, slot.y, 0),
+    // Where the slot actually IS this frame: the centre of its lobe. This is
+    // the one position dice, capture and the magnet all read, which is why
+    // merging needs no changes anywhere in the physics.
+    pos: new THREE.Vector3(slot.x, slot.y, 0),
+    home: new THREE.Vector3(slot.x, slot.y, 0),
+    phase: Math.random() * Math.PI * 2,
+    // Each bubble gets its own drift rates so three of them never pulse in
+    // lockstep, which is what makes a row of spheres read as a screensaver.
+    rate: 0.58 + Math.random() * 0.34,
+    swayRate: 0.41 + Math.random() * 0.28,
+    breathRate: 0.33 + Math.random() * 0.22,
+    // ⭐ A LIST, not a single slot. A bubble can only legitimately hold one
+    // die, but it MUST be able to hold more than one, because the thing that
+    // used to happen when it could not was a letter stuck in a bubble
+    // forever. See fillBubble() for the full story.
+    dice: [],
+    // A die that has been accepted and is flying in but has not landed yet.
+    // This is what closes the double-capture window - see canAccept().
+    inbound: null,
+    popping: 0,       // >0 while the pop animation runs; only on a LEAD slot
+    popT: 0,
+    burstFired: false,
+    // Group membership, maintained by regroup(). `lead` is the slot whose
+    // mesh draws the film this slot is inside; for an unmerged bubble that is
+    // itself. Only a lead carries `members`.
+    lead: null,
+    members: null,
+    lensScale: 1,
+    captureR: r * 1.22,
+  };
+  b.lead = b;
+  b.members = [b];
+
+  // `b.die` stays readable everywhere it already was (the word check, the tap
+  // handler, the debug API) but is now DERIVED, so there is exactly one place
+  // the truth lives. Read-only on purpose: an assignment here is what created
+  // the orphaned-die bug, and now it throws instead of silently losing a die.
+  Object.defineProperty(b, 'die', {
+    get() { return this.dice[0] || null; },
+    enumerable: true,
+  });
+  return b;
+}
+
+/**
+ * @param layout array of { x, y, r, role } - one entry per SLOT. There is no
+ *               longer any such thing as a wide slot: width comes from welding
+ *               neighbours together at run time, not from the layout.
+ */
 export function createBubbles(scene, layout) {
   const group = new THREE.Group();
   scene.add(group);
-  const bubbles = [];
-
-  layout.forEach((slot, i) => {
-    const mat = new THREE.ShaderMaterial({
-      vertexShader: bubbleVert,
-      fragmentShader: bubbleFrag,
-      uniforms: {
-        uTime: { value: 0 },
-        uPop: { value: 0 },
-        uTension: { value: 0 },
-        uFill: { value: 0 },
-        uTint: { value: new THREE.Color(0.55, 0.85, 1.0) },
-        // ⛔ uLobes is a UNIFORM, never a #define. Welding changes how many
-        // lobes a film has several times in a lesson, and a #define would mean
-        // a fresh shader program - a visible compile stall on a classroom TV -
-        // every time a teacher dragged a finger. As a uniform the program is
-        // compiled once and reused for every film.
-        uLobe: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] },
-        uLobeR: { value: [1, 1, 1] },
-        uNeck: { value: [0, 0, 0] },
-        uLobes: { value: 1 },
-        uSpin: { value: new THREE.Vector2() },
-      },
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      blending: THREE.NormalBlending,
-    });
-
-    const r = slot.r || BUBBLE_R_MAX;
-    // ⭐ UNIT sphere, scaled by r. The radius has to be a SCALE, not baked into
-    // the geometry: on a window resize the layout recomputes a new radius, and
-    // a baked geometry cannot follow it. That bug shipped a portrait layout
-    // where the bubbles kept their landscape size and overlapped into a tangle.
-    //
-    // ⛔⛔ THE SPHERE'S POLES POINT ALONG X, AND THAT ONE LINE IS THE WHOLE
-    // FIX FOR THE FACETED NECK.
-    //
-    // This vertex shader displaces each direction by a DIFFERENT radius, so
-    // where the radius changes fastest the mesh needs its vertices. On a merged
-    // film the radius changes fastest across the FILLET - a cone of directions
-    // around the X axis, because the lobes are laid out along X and the peanut
-    // is therefore a surface of revolution about X.
-    //
-    // A stock SphereGeometry puts its poles at +Y and -Y and fans long thin
-    // triangles out of them, and those fans lie straight across that cone: the
-    // merged bubble grew a hard faceted ribbon over the top of its neck and a
-    // matching one underneath, at +Y and -Y and nowhere else. Rotating the
-    // geometry a quarter turn puts the poles on X instead, where the film is
-    // just a spherical cap and nothing is changing - and the latitude rings now
-    // run PARALLEL to the fillet, which is the best possible place for them.
-    //
-    // ⛔ Rotating the GEOMETRY is not the same as rotating the mesh and is safe
-    // where that is not: shading here is a function of direction alone, and
-    // this changes only which directions get a vertex, not what any direction
-    // looks like.
-    //
-    // ⭐ The segment counts are deliberately lopsided for the same reason.
-    // Latitude (across the fillet) is doubled to 96; longitude, which only goes
-    // round the axis of revolution where nothing varies, stays at 64.
-    //
-    // ❗ An icosahedron was tried first and is a trap: three.js subdivides a
-    // PolyhedronGeometry face into (detail+1)^2, not 4^detail, so detail 5 is
-    // 720 triangles and the bubble came back a visible dodecagon.
-    if (!unitSphere) unitSphere = new THREE.SphereGeometry(1, 64, 96).rotateZ(Math.PI / 2);
-    const mesh = new THREE.Mesh(unitSphere, mat);
-    mesh.position.set(slot.x, slot.y, 0);
-    mesh.renderOrder = 10;        // after the dice, so the film sits over them
-    mesh.scale.setScalar(r);
-    // ⛔ A merged film is a peanut up to three lobes long, and three.js culls a
-    // mesh against its GEOMETRY's bounding sphere - the unit sphere's, which
-    // knows nothing about the displacement the vertex shader applies. Left on,
-    // a wide merged bubble vanishes near the edge of frame.
-    mesh.frustumCulled = false;
-
-    group.add(mesh);
-    const b = {
-      index: i,
-      mesh,
-      mat,
-      r,
-      // The slot's place in the LAYOUT - its position with nothing welded. Lobe
-      // positions are derived from this and the live weld state every frame.
-      base: new THREE.Vector3(slot.x, slot.y, 0),
-      // Where the slot actually IS this frame: the centre of its lobe. This is
-      // the one position dice, capture and the magnet all read, which is why
-      // merging needs no changes anywhere in the physics.
-      pos: new THREE.Vector3(slot.x, slot.y, 0),
-      home: new THREE.Vector3(slot.x, slot.y, 0),
-      phase: Math.random() * Math.PI * 2,
-      // Each bubble gets its own drift rates so three of them never pulse in
-      // lockstep, which is what makes a row of spheres read as a screensaver.
-      rate: 0.58 + Math.random() * 0.34,
-      swayRate: 0.41 + Math.random() * 0.28,
-      breathRate: 0.33 + Math.random() * 0.22,
-      // ⭐ A LIST, not a single slot. A bubble can only legitimately hold one
-      // die, but it MUST be able to hold more than one, because the thing that
-      // used to happen when it could not was a letter stuck in a bubble
-      // forever. See fillBubble() for the full story.
-      dice: [],
-      // A die that has been accepted and is flying in but has not landed yet.
-      // This is what closes the double-capture window - see canAccept().
-      inbound: null,
-      popping: 0,       // >0 while the pop animation runs; only on a LEAD slot
-      popT: 0,
-      burstFired: false,
-      // Group membership, maintained by regroup(). `lead` is the slot whose
-      // mesh draws the film this slot is inside; for an unmerged bubble that is
-      // itself. Only a lead carries `members`.
-      lead: null,
-      members: null,
-      lensScale: 1,
-      captureR: r * 1.22,
-    };
-    b.lead = b;
-    b.members = [b];
-    bubbles.push(b);
-
-    // `b.die` stays readable everywhere it already was (the word check, the tap
-    // handler, the debug API) but is now DERIVED, so there is exactly one place
-    // the truth lives. Read-only on purpose: an assignment here is what created
-    // the orphaned-die bug, and now it throws instead of silently losing a die.
-    Object.defineProperty(b, 'die', {
-      get() { return this.dice[0] || null; },
-      enumerable: true,
-    });
-  });
+  const bubbles = layout.map((slot, i) => makeBubble(group, slot, i));
 
   // One weld per BOUNDARY between adjacent slots. `on` is what the teacher has
   // committed to; `target` is what the film is currently animating toward,
@@ -490,6 +540,71 @@ export function createBubbles(scene, layout) {
   const set = { group, bubbles, welds, sig: null };
   regroup(set);
   return set;
+}
+
+// ------------------------------------------------------------- growing a board
+/**
+ * ⭐⭐ A BOARD GROWS; IT IS NEVER REBUILT.
+ *
+ * Summoning a blend bubble splices ONE new slot into the row. It would be far
+ * less code to throw the set away and build a new one from a new layout, and it
+ * would be wrong: a rebuild drops every die already captured, every weld the
+ * teacher has made, and every bubble's idle phase, so the whole row would
+ * visibly re-shuffle at the moment a fourth bubble appeared. Mid-lesson, with
+ * letters already in the bubbles, that is destructive.
+ *
+ * ⛔ A WELD IS A BOUNDARY, so the welds array has to be spliced too, at the
+ * matching position - not reindexed by hand afterwards. Inserting a slot at `i`
+ * adds the boundary to its RIGHT (between the newcomer and what used to be
+ * there), which is what keeps a weld attached to the same two LETTERS rather
+ * than to the same two indices.
+ */
+export function insertBubble(set, atIndex, slot) {
+  const b = makeBubble(set.group, slot, atIndex);
+  set.bubbles.splice(atIndex, 0, b);
+  set.welds.splice(Math.min(atIndex, set.welds.length), 0, { w: 0, target: 0, on: false });
+  reindex(set);
+  return b;
+}
+
+/**
+ * Remove one slot. Anything it was holding is RETURNED rather than dropped -
+ * the caller sends it home, exactly as popping does, because a letter must
+ * never disappear with the bubble around it.
+ */
+export function dropBubble(set, index) {
+  const b = set.bubbles[index];
+  if (!b) return [];
+  const released = b.dice.slice();
+  b.dice.length = 0;
+  b.inbound = null;
+  for (const die of released) {
+    die.scale.setScalar(1);
+    die.userData.settle = undefined;
+  }
+  set.group.remove(b.mesh);
+  b.mat.dispose();
+  set.bubbles.splice(index, 1);
+  // One slot gone means one boundary gone. For a slot at the end that is the
+  // boundary it had; for an interior one, dropping the boundary on its left
+  // leaves its two neighbours adjacent, joined by the boundary on its right.
+  if (set.welds.length) set.welds.splice(Math.max(0, index - 1), 1);
+  reindex(set);
+  return released;
+}
+
+/** Re-number slots after the row has changed length, and regroup the films. */
+function reindex(set) {
+  set.bubbles.forEach((b, i) => {
+    b.index = i;
+    for (const die of b.dice) die.userData.slot = i;
+  });
+  // ⛔ Force a regroup. The connectivity fingerprint is a string of weld
+  // states, and splicing can leave it byte-identical while the row underneath
+  // it has completely changed shape - which would leave films pointing at
+  // slots that have moved or gone.
+  set.sig = null;
+  regroup(set);
 }
 
 // --------------------------------------------------------------------- groups
@@ -723,9 +838,13 @@ export function updateBubbles(set, t, dt, reducedMotion = false, fx = null) {
       // film starts as two tangent spheres and the neck grows from there.
       u.uNeck.value[k] = k === 0 ? 0
         : NECK_K * smoothstep01(JOIN_AT, 1, welds[lead.index + k - 1].w);
+      u.uLobeTint.value[k] = b.tint;
       if (b !== lead) b.mesh.visible = false;
     }
-    for (let k = members.length; k < 3; k++) u.uLobe.value[k].set(0, 0, 0);
+    for (let k = members.length; k < 3; k++) {
+      u.uLobe.value[k].set(0, 0, 0);
+      u.uLobeTint.value[k] = 0;
+    }
     u.uLobes.value = members.length;
     u.uTime.value = t;
     u.uFill.value = members.some(b => b.dice.length) ? 1 : 0;
@@ -901,6 +1020,7 @@ export function resizeBubbles(set, layout) {
     const slot = layout[i];
     if (!slot) return;
     b.r = slot.r;
+    if (slot.role !== undefined) b.role = slot.role;
     b.base.set(slot.x, slot.y, 0);
     b.home.copy(b.base);
     b.pos.copy(b.base);

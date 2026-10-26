@@ -701,10 +701,14 @@ __bubblecvc.throwDie('m', 6, 22)   // launch in world units/sec, no gesture need
 __bubblecvc.films            // ['c', 'at'] - how the row is grouped right now
 __bubblecvc.weld(1, true)    // merge the vowel and the coda
 __bubblecvc.sweep(0, 2)      // replay a finger sweep through the real reducer
+__bubblecvc.shape            // onset/vowel/coda counts, roles, which may be removed
+__bubblecvc.summon('coda')   // grow the board, as tapping open water does
+__bubblecvc.dismiss(4)       // shrink it, as a two-finger tap does
 ```
 
 There are node test suites for everything that CAN be tested off the DOM — the
-weld gesture's decision, the merged geometry, bubble capture, and the octopus:
+weld and blend gestures' decisions, the merged geometry, the board growing,
+role-based capture, bubble capture, and the octopus:
 
 ```sh
 for f in test/*.test.mjs; do node "$f"; done
@@ -996,6 +1000,116 @@ a cluster — a solid mass, a horizontal, a vertical rhythm, a fractal and a fla
 net — and hot pink is still rationed to the branching coral, which now appears
 in only some clusters. One focal point per stretch of reef, not a row of them.
 
+## ⭐⭐ Blend bubbles — growing the board for CCVC and CVCC
+
+Tap the open water **left** of the row and an onset slot appears (`st-o-p`);
+tap right of it and a coda slot appears (`b-a-n-d`). **Two-finger tap** a
+summoned bubble and it goes. Up to three slots a side, so `str-` and `-nch`
+both fit.
+
+The onset bay feeds every onset slot and the coda bay feeds every coda slot —
+the bays sit on the same sides of the screen as the bubbles they fill.
+
+### ⭐ A blend is extra BUBBLES, not a wider one
+
+`st` is two phonemes. A child blending `stop` says /s/ /t/ /o/ /p/, and this
+board's whole premise is one bubble per sound. If a teacher wants `st` shown as
+a unit they **weld the two bubbles together** — which is exactly what the merge
+gesture is for, and why these two features compose rather than collide.
+
+### ⭐⭐ Slots carry a ROLE, not a position
+
+A die used to be addressed to a slot INDEX (`onset → 0`). On a blend board
+there are several onset slots, so a die now carries its **role** — which is
+what `userData.col` always really was, the bay column it came from — and the
+magnet takes **the nearest slot of that role that can still accept it**.
+
+⛔ Deliberately not "the leftmost empty one". Choosing for the child would make
+`s` and `t` land in a fixed order however they were thrown, and this board has
+always been built so that aim matters a little and fill order is free. A letter
+in the wrong half of a blend is one tap to undo.
+
+On a plain CVC board there is exactly one slot per role, so this is the old
+behaviour exactly.
+
+### ⭐ The vowel goes pink, and only once the board has grown
+
+On three bubbles the vowel is the middle one and needs no help. Add a blend
+bubble and it is no longer in the middle — and *find the vowel* is the first
+move of every decoding routine, so the board marks it.
+
+It is a **dyed film, not a pink object**: the interference bands are kept and
+seen *through* the dye. Desaturating a little first is what stops the dye
+fighting the bands — full-strength interference times magenta gives lurid
+stripes, not tinted soap.
+
+⭐ The dye is **per lobe**, not per film. The vowel may well be welded to its
+neighbours, and then only its own lobe should be pink. It rides the same
+smax weight as the normal, so the colour follows the lobe through the neck
+instead of stopping at a hard line.
+
+### ⛔⛔ A board GROWS; it is never rebuilt
+
+Summoning splices **one** slot into the row. Rebuilding the set from a new
+layout would be less code and is wrong: it drops every die already captured,
+every weld the teacher has made and every bubble's idle phase, so the whole row
+would visibly re-shuffle at the moment a fourth bubble appeared — mid-lesson,
+with letters already in the bubbles.
+
+⛔ **A weld is a boundary**, so the welds array is spliced at the matching
+position rather than reindexed afterwards. That is what keeps a weld attached
+to the same two *letters*: weld the rime, then summon an onset bubble in front
+of it, and `at` is still merged.
+
+### ⛔ Where a tap must NOT summon
+
+The test is "beside the bubble **row**", not "anywhere on that half of the
+screen". The bay of dice is also off to the left and right, lower down, and a
+teacher reaching for a letter must not conjure a bubble instead — so a tap only
+summons within a bubble's height of the row.
+
+### ⛔⛔ Two fingers, and the two bugs that cost
+
+A second finger is the only input left that cannot be confused with the
+others: one finger down-then-up is a pop, one finger dragged across a boundary
+is a weld. It is also something a child leaning on the panel will not produce.
+It fires on the **second finger landing**, not on release — a teacher who has
+put two fingers on a bubble has already said what they want, and it is one tap
+to undo.
+
+Both of these got through review and were only caught by driving the real page
+with synthetic pointer events. The arbitration now lives in `rowTouchAction()`
+in `src/weld.js`, pure and tested, for exactly that reason:
+
+- **The two-finger window and the stale-finger window are ONE number.** A
+  pointerup can go missing — the finger leaves the canvas, the panel glitches —
+  and that finger then looks like a finger still down, so the teacher's next
+  ordinary tap becomes a "second finger" and silently deletes a bubble. A
+  generous stale window does not fix this, it moves it: five seconds was tried
+  and a stale finger still ate the very next tap. `TWO_FINGER_MS` is short
+  enough that a forgotten finger has expired before any realistic next tap.
+- **A second finger always ENDS the first finger's gesture, and never starts
+  one.** It used to fall through and overwrite `weldDrag` with a gesture of its
+  own, orphaning the first finger's live weld preview — nothing reverted it, so
+  the boundary finished its merge animation and *looked* welded while the
+  committed state said it was not.
+
+A second finger landing **mid-sweep** is a fumble, not a removal: it would
+delete the very bubble being merged. It cancels instead.
+
+### Driving it without a panel
+
+```js
+__bubblecvc.shape            // {onset, vowel, coda, slots, vowelAt, removable, roles, tint}
+__bubblecvc.summon('onset')  // as tapping the open water to the left does
+__bubblecvc.dismiss(0)       // as a two-finger tap does
+```
+
+`test/blend-bubbles.test.mjs` — 59 assertions covering where a tap summons and
+where it must not, what two fingers may remove, that growing the board disturbs
+nothing already on it, role-based capture, and the layout at every size up to
+seven slots.
+
 ## The octopus's ink (`src/ink.js`)
 
 ⛔⛔ **THE INK IS TIED TO THE OCTOPUS. It disperses FROM him, on whatever plane
@@ -1044,18 +1158,17 @@ octopus, full stop. The levers that stay inside that rule are:
 
 ## Not built yet
 
-- **Advanced mode** — CCVC / CVCC. Bubble count is already data-driven
-  (`layoutFor` takes a slot count), so the layout is ready for it.
 - **Digraphs** — two dice welded as one unit, so the bubble count follows the
-  *phoneme* count rather than the letter count. The rendering half of this is
-  now done: bubble merging draws exactly the wide bubble a `th` needs. What
-  remains is the welded DIE — one die carrying two letters — and making a merge
-  happen automatically when one lands, rather than only when a teacher asks.
+  *phoneme* count rather than the letter count. Most of this now exists: bubble
+  merging draws the wide bubble a `th` needs, and blend bubbles grow the board.
+  What remains is the welded DIE — one die carrying two letters — and making a
+  merge happen automatically when one lands, rather than only when asked.
 - **Chunked audio for a merged bubble.** Right now merging the rime is purely
   visual: `c-a-t` is still spoken as three sounds and then the word. A teacher
   who has just shown `-at` as one unit will want to hear `/k/ · at`, and that
   needs the VC clips (`audio/vc/at.wav`) which are not shipped — see *Whole-word
-  audio is NOT shipped yet*. The seam is ready; the files are not.
+  audio is NOT shipped yet*. The seam is ready; the files are not. Blend boards
+  want the same thing for `st-` and `-nd`.
 - **Self-guided mode** — the laptop version where the app, not the teacher, tells
   the student what to build.
 - **Word history** — showing the chain of words built this session.

@@ -19,8 +19,9 @@ import { createOcean, updateOcean, makeWater } from './ocean.js';
 import { createReef, updateReef, loadCoral } from './reef.js';
 import { createBubbles, updateBubbles, fillBubble, popBubble, bubbleHit, slotAt, layoutFor,
          resizeBubbles, disposeBubbles, aimWelds, commitWelds, weldState, filmDice,
-         filmSpan, films } from './bubbles.js';
-import { beginWeldGesture, extendWeldGesture, weldPreview, resolveWeldGesture } from './weld.js';
+         filmSpan, films, insertBubble, dropBubble } from './bubbles.js';
+import { beginWeldGesture, extendWeldGesture, weldPreview, resolveWeldGesture,
+         summonSide, rowTouchAction, TWO_FINGER_MS } from './weld.js';
 import { createDie, applyWobble, layoutBay, DIE_SIZE, disposeDie } from './dice.js';
 import * as P from './physics.js';
 import * as A from './audio.js';
@@ -64,7 +65,50 @@ let timeScale = 1;
 let bubbleY = 0;
 let reefRebuildTimer = null;
 
-const SLOTS = 3;
+// ⭐⭐ THE BOARD SHAPE. One vowel, always; however many onset and coda slots
+// the teacher has summoned either side of it.
+//
+// Slot order is simply left to right: onset slots, the vowel, coda slots. So
+// `role` is a function of position, the word reads in slot order, and nothing
+// has to remember which bubble was "the original" one.
+//
+// ⭐ Why blends are extra BUBBLES rather than a wider one: `st` is two
+// phonemes. A child blending `stop` says /s/ /t/ /o/ /p/, and the board's
+// whole premise is one bubble per sound. If a teacher wants `st` shown as a
+// unit they weld the two bubbles together - which is exactly what the merge
+// gesture is for, and why these two features fit.
+const ROLE_ONSET = 0, ROLE_VOWEL = 1, ROLE_CODA = 2;
+const BASE_SHAPE = { onset: 1, coda: 1 };
+// Up to two extra each side: `str-` and `-nch` are real, and a row of seven
+// bubbles is already as narrow as the letters can stand.
+const MAX_PER_SIDE = 3;
+let shape = { ...BASE_SHAPE };
+
+const slotCount = () => shape.onset + 1 + shape.coda;
+const vowelIndex = () => shape.onset;
+const roleOf = i => (i < shape.onset ? ROLE_ONSET
+                  : i === shape.onset ? ROLE_VOWEL : ROLE_CODA);
+
+/** The layout the current shape wants, with each slot's role attached. */
+function boardLayout() {
+  return layoutFor(slotCount(), bounds, bubbleY)
+    .map((g, i) => ({ ...g, role: roleOf(i) }));
+}
+
+/**
+ * ⭐ The vowel goes pink once the board has grown, and only then.
+ *
+ * On a three-bubble board the vowel is the middle one and needs no help. Add a
+ * blend bubble and it is no longer in the middle, and "find the vowel" is the
+ * first move of every decoding routine - so the board marks it. Driven off the
+ * board STATE after every change, like the octopus, rather than off the events
+ * that caused it.
+ */
+function syncVowelTint() {
+  if (!bubbles) return;
+  const on = slotCount() > 3 ? 1 : 0;
+  for (const b of bubbles) b.tint = b.role === ROLE_VOWEL ? on : 0;
+}
 
 // ⭐ Spell one of these and the shark comes.
 //
@@ -210,6 +254,10 @@ function startSession(chosen) {
   prescreen.hide();
   running = true;
   lastSpoken = '';
+  // ⛔ Back to plain CVC for every lesson. Blend bubbles are a move a teacher
+  // makes inside a lesson, not a setting that outlives it - coming back from
+  // the prescreen to a five-bubble board nobody asked for would be baffling.
+  shape = { ...BASE_SHAPE };
 
   A.unlock();
   A.preloadPhonemes([...board.onset, ...board.vowel, ...board.coda]);
@@ -249,8 +297,9 @@ function endSession() {
 
 function buildBubbles() {
   if (bubbleSet) { scene.remove(bubbleSet.group); disposeBubbles(bubbleSet); }
-  bubbleSet = createBubbles(scene, layoutFor(SLOTS, bounds, bubbleY));
+  bubbleSet = createBubbles(scene, boardLayout());
   bubbles = bubbleSet.bubbles;
+  syncVowelTint();
 }
 
 function buildBay() {
@@ -274,12 +323,73 @@ function buildBay() {
  * resize is picked up without anyone having to re-register.
  */
 function vowelBubbleLayout() {
-  const row = layoutFor(SLOTS, bounds, bubbleY);
-  return row[Math.min(1, row.length - 1)];
+  const row = boardLayout();
+  return row[Math.min(vowelIndex(), row.length - 1)];
+}
+
+/** Slot indices a two-finger tap is allowed to remove. */
+function removableSlots() {
+  if (!bubbles) return [];
+  return bubbles
+    .filter(b => (b.role === ROLE_ONSET && shape.onset > 1)
+              || (b.role === ROLE_CODA && shape.coda > 1))
+    .map(b => b.index);
+}
+
+/**
+ * Summon a blend bubble. The new slot goes on the OUTSIDE of its side, so the
+ * word still reads in slot order: a second onset lands left of the first, a
+ * second coda right of the last.
+ */
+function summonBubble(side) {
+  const onset = side === 'onset';
+  if ((onset ? shape.onset : shape.coda) >= MAX_PER_SIDE) return false;
+  // Lay the row out at its NEW length first, so the newcomer is born at the
+  // position it is going to keep and the row does not jump a frame later.
+  if (onset) shape.onset++; else shape.coda++;
+  const layout = boardLayout();
+  const at = onset ? 0 : slotCount() - 1;
+  insertBubble(bubbleSet, at, layout[at]);
+  resizeBubbles(bubbleSet, layout);
+  relayoutBay();
+  syncVowelTint();
+  lastSpoken = '';
+  A.sfxSummon();
+  return true;
+}
+
+/** Take a summoned bubble away; whatever it held goes home. */
+function dismissBubble(index) {
+  const b = bubbles[index];
+  if (!b) return false;
+  const onset = b.role === ROLE_ONSET;
+  for (const die of dropBubble(bubbleSet, index)) P.sendHome(die);
+  if (onset) shape.onset--; else shape.coda--;
+  resizeBubbles(bubbleSet, boardLayout());
+  relayoutBay();
+  syncVowelTint();
+  lastSpoken = '';
+  syncOctopus();
+  A.sfxDismiss();
+  return true;
+}
+
+/** The bay has to re-fit too: a narrower row means a different die size. */
+function relayoutBay() {
+  if (!board) return;
+  const sets = [board.onset, board.vowel, board.coda];
+  const places = layoutBay(sets, bounds, bayTop);
+  let k = 0;
+  for (const die of dice) {
+    const p = places[k++];
+    if (!p) continue;
+    die.userData.home.set(p.x, p.y, p.z);
+    if (die.userData.state === 'bay') die.position.copy(die.userData.home);
+  }
 }
 
 function relayout() {
-  resizeBubbles(bubbleSet, layoutFor(SLOTS, bounds, bubbleY));
+  resizeBubbles(bubbleSet, boardLayout());
   const sets = [board.onset, board.vowel, board.coda];
   const places = layoutBay(sets, bounds, bayTop);
   let k = 0;
@@ -331,6 +441,13 @@ function wireChrome() {
 // ------------------------------------------------------------------- pointer
 let drag = null;        // a die being dragged out of the bay
 let weldDrag = null;    // a finger on the bubble row: a pop or a merge
+// ⭐ Every finger currently on the bubble row, by pointerId. One finger is a
+// pop or a weld; the SECOND finger landing is what makes it a removal, so the
+// handler has to know about fingers it is not otherwise tracking.
+const rowTouches = new Map();
+// The two-finger window, and the staleness window, are one number - see
+// TWO_FINGER_MS in src/weld.js for why they must be.
+let summonTap = null;   // a finger down in the empty water beside the row
 
 function toWorld(ev) {
   const ndc = new THREE.Vector2(
@@ -386,6 +503,36 @@ function wirePointer(canvas) {
     // then throw two letters into it.
     const hit = bubbleHit(bubbleSet, p);
     if (hit) {
+      // ⭐⭐ SECOND FINGER ON THE ROW = REMOVE, and it is handled before
+      // anything else because it has to CANCEL what the first finger started.
+      // The first finger is already running a weld gesture with a live preview
+      // animating; leaving that in place would commit a merge at the same
+      // moment the bubble is taken away.
+      // Map hygiene; rowTouchAction() is what actually decides staleness.
+      const now = performance.now();
+      for (const [id, t] of rowTouches) {
+        if (now - t.t > TWO_FINGER_MS) rowTouches.delete(id);
+      }
+
+      const first = [...rowTouches.values()][0];
+      const act = rowTouchAction(
+        first, now, hit.index,
+        // A merged film counts as one bubble to two fingers, so a finger on
+        // either lobe is a finger on the whole thing.
+        first ? removableSlots().filter(i =>
+          bubbles[i].lead === bubbles[first.slot].lead || bubbles[i].lead === hit.lead) : [],
+        !!weldDrag && weldDrag.g.reach > hit.r * 0.62);
+
+      if (act.kind !== 'first') {
+        // Two fingers on the row ends whatever the first one was doing, and
+        // the second finger never starts a gesture of its own.
+        if (weldDrag) { weldDrag = null; aimWelds(bubbleSet, null); }
+        rowTouches.set(e.pointerId, { slot: hit.index, t: now });
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* not fatal */ }
+        if (act.kind === 'remove') dismissBubble(act.slot);
+        return;
+      }
+      rowTouches.set(e.pointerId, { slot: hit.index, t: now });
       // Capture keeps the sweep alive if the finger leaves the canvas, but it
       // is an optimisation, not a requirement - and it throws for any pointer
       // the browser does not consider active. The gesture must not be lost
@@ -396,6 +543,16 @@ function wirePointer(canvas) {
         g: beginWeldGesture(hit.index),
         from: new THREE.Vector2(p.x, p.y),
       };
+      return;
+    }
+
+    // Empty water beside the row. Recorded now and acted on at pointerup, for
+    // the same reason the pop is: a finger that lands here may still be on its
+    // way somewhere else.
+    const side = summonSide(p, bubbles.map(b => ({ x: b.pos.x, y: b.pos.y, r: b.r })));
+    if (side) {
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* not fatal */ }
+      summonTap = { id: e.pointerId, side, from: new THREE.Vector2(p.x, p.y), reach: 0 };
       return;
     }
 
@@ -412,6 +569,12 @@ function wirePointer(canvas) {
   });
 
   canvas.addEventListener('pointermove', e => {
+    if (summonTap && e.pointerId === summonTap.id) {
+      const p = toWorld(e);
+      summonTap.reach = Math.max(summonTap.reach,
+        Math.hypot(p.x - summonTap.from.x, p.y - summonTap.from.y));
+      return;
+    }
     if (weldDrag && e.pointerId === weldDrag.id) {
       const p = toWorld(e);
       // ⭐ A LOOSER reach than the tap test. A finger sweeping between two
@@ -435,6 +598,15 @@ function wirePointer(canvas) {
   });
 
   const release = e => {
+    rowTouches.delete(e.pointerId);
+    if (summonTap && e.pointerId === summonTap.id) {
+      const t = summonTap;
+      summonTap = null;
+      // A tap, not a swipe that happened to start out here.
+      const r = bubbles[0] ? bubbles[0].r : 4;
+      if (t.reach <= r * 0.62) summonBubble(t.side);
+      return;
+    }
     if (weldDrag && e.pointerId === weldDrag.id) {
       const g = weldDrag.g;
       weldDrag = null;
@@ -478,6 +650,8 @@ function wirePointer(canvas) {
   };
   canvas.addEventListener('pointerup', release);
   const cancel = e => {
+    rowTouches.delete(e.pointerId);
+    summonTap = null;
     if (weldDrag && e.pointerId === weldDrag.id) {
       weldDrag = null;
       aimWelds(bubbleSet, null);
@@ -486,13 +660,16 @@ function wirePointer(canvas) {
     release(e);
   };
   canvas.addEventListener('pointercancel', cancel);
+  // A capture can be lost without an up or a cancel ever arriving; that pointer
+  // is gone as far as this handler is concerned.
+  canvas.addEventListener('lostpointercapture', e => { rowTouches.delete(e.pointerId); });
 }
 
 // --------------------------------------------------------------- word state
 function currentWord() {
   const letters = [];
   const slots = [];
-  for (let i = 0; i < SLOTS; i++) {
+  for (let i = 0; i < slotCount(); i++) {
     const b = bubbles[i];
     if (b && b.die) { letters.push(b.die.userData.ch); slots.push(i); }
     else { letters.push(null); slots.push(null); }
@@ -520,7 +697,7 @@ function currentWord() {
  */
 function syncOctopus() {
   if (!octopus) return;
-  const vowel = currentWord().raw[1];
+  const vowel = currentWord().raw[vowelIndex()];
   // ⛔ THE O BEING THERE IS THE WHOLE CONDITION. He comes while it is in the
   // bubble and goes back when it leaves - which in practice means when the
   // bubble is popped.
@@ -538,11 +715,18 @@ function syncOctopus() {
 
 function speakIfReady() {
   const { raw } = currentWord();
-  const [onset, vowel, coda] = raw;
+  const v = vowelIndex();
+  const onsets = raw.slice(0, v);
+  const codas = raw.slice(v + 1);
+  const vowel = raw[v];
   let seq = null;
 
-  if (onset && vowel && coda) seq = [onset, vowel, coda];
-  else if (!onset && vowel && coda) seq = [vowel, coda];
+  // ⭐ The same two rules as a plain CVC board, written for any number of
+  // slots. The word-family move - park the rime and try onsets in front of it -
+  // is the reason the second rule exists, and on a blend board it has to wait
+  // for EVERY onset slot to be empty, not just the first.
+  if (raw.every(Boolean)) seq = raw.slice();
+  else if (vowel && onsets.every(x => !x) && codas.every(Boolean)) seq = [vowel, ...codas];
 
   if (!seq) { lastSpoken = ''; return; }
   const key = seq.join('');
@@ -641,7 +825,7 @@ function frame() {
       const u = die.userData;
       switch (u.state) {
         case 'flying': {
-          const ev = P.stepFlight(die, dt, { bounds, bayTop, bubbles, targetSlot: u.col });
+          const ev = P.stepFlight(die, dt, { bounds, bayTop, bubbles, targetRole: u.col });
           if (ev && ev.type === 'wall') {
             A.sfxWall(ev.speed / 14);
           } else if (ev && ev.type === 'captured') {
@@ -821,6 +1005,31 @@ window.__bubblecvc = {
       }
     }
     return decided.kind + (decided.preview ? ' ' + JSON.stringify(decided.preview) : '');
+  },
+  /**
+   * ⭐ The board shape, and the handles for changing it. A tap in open water
+   * and a two-finger tap are both as undrivable through remote automation as
+   * the weld drag is, so these exist for the same reason.
+   */
+  get shape() {
+    return { onset: shape.onset, vowel: 1, coda: shape.coda, slots: slotCount(),
+             vowelAt: vowelIndex(), removable: removableSlots(),
+             roles: bubbles ? bubbles.map(b => b.role) : null,
+             tint: bubbles ? bubbles.map(b => b.tint) : null };
+  },
+  /** Summon a blend bubble, as tapping the empty water beside the row does. */
+  summon(side) {
+    if (!running) return 'no board';
+    if (side !== 'onset' && side !== 'coda') return "side must be 'onset' or 'coda'";
+    return summonBubble(side) ? 'summoned ' + side + ' -> ' + slotCount() + ' slots'
+                              : side + ' is already at the maximum';
+  },
+  /** Two-finger tap a summoned bubble away. */
+  dismiss(index) {
+    if (!running) return 'no board';
+    if (!removableSlots().includes(index)) return 'slot ' + index + ' is not removable';
+    dismissBubble(index);
+    return 'dismissed ' + index + ' -> ' + slotCount() + ' slots';
   },
   /** Lobe centres and the film each slot belongs to - the merged geometry. */
   get lobes() {
