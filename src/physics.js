@@ -61,7 +61,13 @@ export function stepFlight(die, dt, ctx) {
   let event = null;
 
   if (target) {
-    const tx = target.mesh.position.x, ty = target.mesh.position.y;
+    // ⭐ `pos`, not `mesh.position`. A slot's mesh is only its own while the
+    // bubble is unmerged - once a teacher welds it to its neighbour the film is
+    // drawn by one mesh covering both, and the slot's own centre lives in
+    // `pos`. Reading `pos` is the whole reason merging needed no physics
+    // changes: the magnet keeps aiming at the right lobe, and because the lobes
+    // move as the weld animates, a die already in flight simply follows.
+    const tx = target.pos.x, ty = target.pos.y;
     const dx = tx - p.x, dy = ty - p.y;
     const dist = Math.hypot(dx, dy);
     const range = target.captureR * MAGNET_RANGE;
@@ -158,7 +164,7 @@ export function stepCapture(die, dt) {
   const k = Math.min(1, u.capT / 0.26);
   const e = 1 - (1 - k) ** 3;
   const b = u.capBubble;
-  die.position.lerpVectors(u.capFrom, new THREE.Vector3(b.mesh.position.x, b.mesh.position.y, 0.08), e);
+  die.position.lerpVectors(u.capFrom, new THREE.Vector3(b.pos.x, b.pos.y, 0.08), e);
   // Shrink a hair on the way in, then settle - reads as passing through a film.
   const s = 1 - Math.sin(k * Math.PI) * 0.16;
   die.scale.setScalar(s);

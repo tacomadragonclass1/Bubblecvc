@@ -247,6 +247,209 @@ the **nearest** bubble rather than the first match. Returning the first meant a
 tap in the overlap always popped the left-hand bubble — mid-chain that silently
 destroys the wrong letter.
 
+## ⭐⭐ Merging bubbles — showing the rime as one unit
+
+Drag a finger **between two bubbles** and they merge into one long bubble. Drag
+across all three and the whole word becomes one bubble. Drag across the same
+pair again and it comes apart.
+
+This is the orthographic-mapping move. A child who can see `at` sitting inside a
+single membrane is being shown that `-at` is **one thing** — a rime, a chunk
+that recurs across `cat`, `hat`, `mat` — rather than two letters that happen to
+be adjacent. It works on the onset side too (`st-o-p`), and the three-bubble
+merge frames the whole word as a unit.
+
+### ⭐⭐ Slot and film are separate things
+
+This is the idea the whole feature rests on.
+
+A **slot** is the logical home of one phoneme. It owns the die, the capture
+radius, the magnet target and its place in the word. There are always exactly as
+many slots as the board has sounds, and merging never changes that.
+
+A **film** is the soap membrane you can see, and one film may wrap several
+adjacent slots.
+
+So a merge changes how many membranes are drawn and what shape they are — and
+nothing else. The word state, the throwing, the aiming, the audio, the octopus
+routine and `currentWord()` are all untouched, and `bubbles[i].die` still means
+what it always meant. `src/physics.js` needed exactly one change: read a slot's
+centre from `pos` rather than from `mesh.position`, because a slot's mesh is
+only its own while it is unmerged.
+
+### ⭐⭐ The merged shape is a radial union of spheres, in closed form
+
+The obvious way to draw a two-slot bubble is to stretch one sphere sideways, and
+that is what the old `span: 2` code did. It is wrong here: a stretched sphere is
+a capsule, and a capsule says *one shape*, when the entire point is that the
+child can still see two letters as two things inside one envelope. Two bubbles
+that have coalesced are a **peanut** — two lobes with a filleted waist.
+
+Marching cubes and a raymarched SDF both do it and both cost far too much. So:
+keep the unit sphere and **displace it in the vertex shader**. For each vertex
+direction, the surface is the farthest point at which that ray leaves any lobe,
+which is just the far root of a ray/sphere intersection — one `sqrt` per lobe,
+no iteration.
+
+The hard union of two spheres has a **crease** where they intersect. Surface
+tension does not allow a crease, so the roots are combined with a smooth maximum
+instead of a maximum, and the blend radius **is** the neck fillet. The same
+weight blends the two lobes' normals, which keeps the shading continuous across
+the fillet for free.
+
+`uLobes` is a **uniform, never a `#define`**. Welding changes a film's lobe
+count several times in a lesson, and a `#define` would mean a new shader program
+— a visible compile stall on a classroom TV — every time a teacher dragged a
+finger.
+
+### ⛔⛔ The handover happens at TANGENCY, and that is why it is seamless
+
+A radially displaced sphere can only draw a **connected** blob, so two bubbles
+that are still apart cannot be drawn by one film — the waist would pinch to a
+point across a gap of real water. The welds therefore run in two stages, and the
+numbers are arranged so the seam between them is invisible:
+
+| weld | what is drawn | lobe pitch |
+|---|---|---|
+| 0 | two separate films | 2.12 r (the 6% gap) |
+| `JOIN_AT` ≈ 0.273 | **handover** | exactly 2.00 r — *tangent* |
+| 1 | one film, fillet open | 1.68 r |
+
+**`JOIN_AT` is derived, not chosen**: it is `2·GAP / PULL`, the weld amount at
+which the lobes touch. At that instant the fillet is still zero, so "one film
+drawing two tangent lobes" is pixel-for-pixel "two bubbles touching". If it ever
+becomes a tuned constant, the merge grows a visible pop.
+
+Two bugs found by the test that asserts no lobe ever jumps, both worth
+remembering:
+
+- **The pull has to apply to the whole ROW, not to each film.** Computing lobe
+  offsets per film meant a boundary's pull did nothing until the film formed,
+  and then the lobes snapped inward by the entire gap in one frame — 0.6 world
+  units on a 4.1 radius. Walking the whole row makes two bubbles *lean* together
+  through the gesture, arrive touching, and only then become one film. The lean
+  is also the live feedback: a teacher sees the merge coming before lifting
+  their finger.
+- **A merged film must move as one body, but it has to get there slowly.** Left
+  on their own oscillators the lobes drift vertically against each other by most
+  of a bob amplitude, and the letters drift with them. The fade to a shared
+  rhythm starts at exactly `JOIN_AT` (so there is no step) and runs across the
+  whole remaining weld (so the sync-up is not itself a lurch).
+
+The row stays **centred** rather than anchored: merging makes the word
+physically shorter, so every slot shifts a little toward the middle. The camera
+never moves, so the board has to.
+
+### ⛔⛔ The sphere's poles point along X
+
+A merged film is a surface of revolution about **X**, because the lobes are laid
+out along X. The displaced radius changes fastest across the **fillet** — a cone
+of directions around that axis.
+
+A stock `SphereGeometry` puts its poles at +Y and −Y and fans long thin triangles
+out of them, straight across that cone. The merged bubble grew a hard **faceted
+ribbon** over the top of its neck and a matching one underneath — at +Y and −Y
+and nowhere else, which is how it was diagnosed. Rotating the geometry a quarter
+turn puts the poles on X, where the film is just a spherical cap and nothing is
+changing, and the latitude rings now run *parallel* to the fillet. Segment counts
+are deliberately lopsided for the same reason: latitude (across the fillet) is
+96, longitude (round the axis, where nothing varies) stays 64.
+
+Rotating the **geometry** is not the same as rotating the mesh, and is safe
+where that is not: shading here is a function of direction alone, so it changes
+only which directions get a vertex.
+
+❗ An icosahedron was tried first and is a trap. three.js subdivides a
+`PolyhedronGeometry` face into `(detail+1)²`, **not** `4^detail`, so
+`IcosahedronGeometry(1, 5)` is 720 triangles and the bubble came back a visible
+dodecagon.
+
+### ⛔⛔ The idle turn is a shader rotation, not a mesh rotation
+
+Turning the mesh was correct while every bubble was a sphere: a sphere is the
+same shape from every angle, so rotating it moved the interference pattern and
+nothing else. A peanut is not. Rotating the mesh swung one lobe toward the
+camera and the other away — the two halves of a merged bubble rendered at
+visibly **different sizes** — and tilted the film while the letters inside
+stayed level, leaving each letter off the centre of its own lobe.
+
+What the turn is *for* is the iridescence shifting as the film moves, and that
+only needs the sampling direction to turn. `uSpin` rotates the pattern; the
+geometry stays put. Identical to the old look on a single bubble, and the only
+sane behaviour on a merged one.
+
+### ⭐⭐ The gesture acts on the BOUNDARY, not on the bubbles
+
+`src/weld.js` is a pure reducer — no THREE, no DOM — and that is deliberate:
+a finger drag **cannot be observed in this project**. Synthetic pointer events do
+not reliably deliver `pointerdown` through remote automation, and `rAF` is
+throttled to about 1 Hz, so an animation cannot be watched either. Keeping the
+decision pure is what makes it testable at all; `src/main.js` is left with
+nothing but plumbing.
+
+A finger laid across the vowel and the coda crosses one boundary and welds it.
+Across all three, it crosses both and welds both. Across an already-welded pair,
+it crosses the same boundary and takes it apart. There is no separate "unmerge"
+gesture to teach, and the three-bubble case is not a special case — it falls out
+of counting boundaries.
+
+**The result comes from the RANGE of slots touched, not from the path.** A
+teacher's finger on a 75" panel does not travel in a straight line, may dip below
+the row between two bubbles, and may arrive at the second from underneath. Taking
+`min..max` of every slot the finger was over means a wobbly sweep, a diagonal,
+and a finger that skips the middle bubble all do the obvious thing.
+
+**The toggle is decided over the whole range at once**: if every boundary crossed
+is already welded, the gesture unwelds them; otherwise it welds all of them.
+Per-boundary toggling would make a sweep across all three flip a half-merged
+board into the *other* half-merged board, which is unpredictable in front of a
+class. This way one sweep always means "make this one bubble" and a second
+identical sweep always means "put it back".
+
+### ⛔⛔ The pop moved from `pointerdown` to `pointerup`, and it had to
+
+A tap pops; a drag welds. Both begin with a finger landing on a bubble, so they
+are indistinguishable at the moment of `pointerdown` — the only thing that tells
+them apart is what the finger does next. Popping on the way down meant every
+merge gesture destroyed a letter before it started.
+
+The cost is a tap's worth of latency on a pop (under 150 ms, and how every button
+on the panel already behaves). The cost of the other mistake is a letter silently
+vanishing mid-chain, which is the failure this app has spent the most effort
+eliminating.
+
+**Ambiguous means do nothing.** A pop needs *both* that the gesture crossed no
+boundary *and* that the finger never strayed more than `TAP_REACH` (0.62 r) from
+where it went down. A finger that starts on a bubble, swings well past the row
+and comes back is an abandoned drag, and resolves to `none` — never to a pop.
+
+### A merged bubble pops as ONE bubble
+
+Tap either lobe and every letter in that film comes home. What is on screen is
+one membrane, and popping it has to do what it looks like it does — which is also
+the long-standing rule that popping *always* empties a bubble. A teacher who
+wants to change just the vowel splits the bubble first; the gesture that merged
+it also takes it apart.
+
+`canAccept()` reads the pop state from the slot's **film**, not from the slot. An
+earlier version checked only the slot, and a die could be thrown into the far
+lobe of a bubble that was in the middle of bursting.
+
+### Driving it without a finger
+
+`window.__bubblecvc` carries the handles, because the gesture cannot be driven
+through remote automation:
+
+- `.welds` — committed state, live animation value, and target per boundary
+- `.films` — how the row is grouped right now, e.g. `['c', 'at']`
+- `.lobes` — each slot's live centre and which film it belongs to
+- `.weld(boundary, on)` — weld or unweld directly (0 = onset\|vowel, 1 = vowel\|coda)
+- `.sweep(a, b)` — replay a whole finger sweep through the real reducer and
+  report what it decided
+
+`test/bubble-merge.test.mjs` covers the decision and the geometry — 58
+assertions, including the no-jump test described above.
+
 ### ⭐ The reef travels; the gameplay does not
 
 The camera never moves. The reef streams toward it on a recycling conveyor
@@ -440,6 +643,15 @@ draw-call bound, not triangle bound, and each band is still merged into one
 mesh. Density is one constant: "one garden roughly every 26 units" in
 `createReef`. ⚠️ Still unverified on the actual classroom panel.
 
+**Bubble merging cost nothing in draw calls and moved triangles the right way.**
+The film mesh doubled in latitude segments (6,016 → 12,288 triangles) to resolve
+the neck fillet, but a merged board draws *fewer* films: one bubble per film
+instead of three. Measured on a full board with all three welded into one,
+`calls` went 215 → 214 and triangles *fell*. ⭐ `programs` did not change at any
+point, which is the thing to watch — it is the proof that `uLobes` being a
+uniform rather than a `#define` really does avoid a shader recompile when a
+teacher merges mid-lesson.
+
 The reef was drawing a separate mesh per coral segment, kelp blade and anemone
 tentacle. With only ~50k triangles that made it **draw-call bound**, which is the
 worst case for the weak SoC behind a classroom panel. Three fixes:
@@ -486,12 +698,42 @@ permanent inspection handle:
 __bubblecvc.slots            // ['m', 'a', 't']
 __bubblecvc.dice             // every die: letter, state, position, velocity
 __bubblecvc.throwDie('m', 6, 22)   // launch in world units/sec, no gesture needed
+__bubblecvc.films            // ['c', 'at'] - how the row is grouped right now
+__bubblecvc.weld(1, true)    // merge the vowel and the coda
+__bubblecvc.sweep(0, 2)      // replay a finger sweep through the real reducer
+```
+
+There are node test suites for everything that CAN be tested off the DOM — the
+weld gesture's decision, the merged geometry, bubble capture, and the octopus:
+
+```sh
+for f in test/*.test.mjs; do node "$f"; done
 ```
 
 ⚠️ When driving it from a remote devtools bridge, **screenshot pixels are not
 CSS pixels.** This viewport reports 2184×1114 while screenshots come back at
 1538×784 — synthetic `clientX/Y` taken off a screenshot must be scaled by the
-ratio or every tap lands somewhere else entirely.
+ratio or every tap lands somewhere else entirely. Invert the app's own
+`toWorld()` instead: `clientX = ((wx / bounds.x) + 1) / 2 * innerWidth`.
+
+⚠️ **Serve on a port that has never served anything else.** `python -m
+http.server` sends no cache headers, so a port reused from an earlier project
+hands back *that* project's cached `index.html` — this session loaded the braille
+app at `127.0.0.1:8841` while the server on 8841 was correctly serving Bubble
+CVC, and `fetch()` of the modules showed fresh content the whole time. A no-store
+dev server does not help; the stale entry was cached before it existed.
+
+⚠️ Synthetic `PointerEvent`s cannot call `setPointerCapture` — the browser does
+not consider that pointer active and it throws. The weld handler treats capture
+as optional for exactly this reason, so a sweep can be replayed end to end:
+
+```js
+const send = (type, wx, wy) => stage.dispatchEvent(new PointerEvent(type, {
+  bubbles: true, pointerId: 7, pointerType: 'touch', isPrimary: true,
+  clientX: ((wx / bounds.x) + 1) / 2 * innerWidth,
+  clientY: (1 - (wy / bounds.y)) / 2 * innerHeight,
+}));
+```
 
 ---
 
@@ -756,13 +998,18 @@ in only some clusters. One focal point per stretch of reef, not a row of them.
 
 ## Not built yet
 
-- **Advanced mode** — CCVC / CVCC. Bubble count is already data-driven (`layoutFor`
-  takes a slot count, and `span` widens a bubble), so the layout is ready for it.
-- **Digraphs** — two dice welded as one unit. The intended behaviour: on a
-  four-slot board, throwing a welded `th` into the onset side **merges the first
-  two bubbles into one wider bubble**, so the bubble count follows the *phoneme*
-  count rather than the letter count. `span: 2` in the bubble layout already
-  renders this; the merge logic is what remains.
+- **Advanced mode** — CCVC / CVCC. Bubble count is already data-driven
+  (`layoutFor` takes a slot count), so the layout is ready for it.
+- **Digraphs** — two dice welded as one unit, so the bubble count follows the
+  *phoneme* count rather than the letter count. The rendering half of this is
+  now done: bubble merging draws exactly the wide bubble a `th` needs. What
+  remains is the welded DIE — one die carrying two letters — and making a merge
+  happen automatically when one lands, rather than only when a teacher asks.
+- **Chunked audio for a merged bubble.** Right now merging the rime is purely
+  visual: `c-a-t` is still spoken as three sounds and then the word. A teacher
+  who has just shown `-at` as one unit will want to hear `/k/ · at`, and that
+  needs the VC clips (`audio/vc/at.wav`) which are not shipped — see *Whole-word
+  audio is NOT shipped yet*. The seam is ready; the files are not.
 - **Self-guided mode** — the laptop version where the app, not the teacher, tells
   the student what to build.
 - **Word history** — showing the chain of words built this session.

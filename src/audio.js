@@ -222,6 +222,65 @@ export function sfxPop() {
 }
 
 /** Flick that did not reach: a soft deflating sigh, never a buzzer. */
+/**
+ * Two bubbles coalescing. ⭐ The opposite shape of sfxPop(): a pop is a sharp
+ * transient that falls away, so a merge has to be a soft one that SETTLES - it
+ * swells into a low note and stops there. If it ticked or snapped at all it
+ * read as a letter being destroyed, which is the one thing a teacher must never
+ * think they just did.
+ *
+ * @param walls how many shared walls let go - a sweep across all three bubbles
+ *              merges two boundaries and sounds fuller for it.
+ */
+export function sfxMerge(walls = 1) {
+  initAudio();
+  const t0 = ctx.currentTime;
+  // Upward glide into a resting fifth. Two voices, the second detuned, so it
+  // arrives as a chord rather than as a beep.
+  const f0 = walls > 1 ? 150 : 185;
+  [1, 1.5].forEach((mult, i) => {
+    const o = ctx.createOscillator();
+    o.type = 'triangle';
+    const s = t0 + i * 0.03;
+    o.frequency.setValueAtTime(f0 * mult * 0.72, s);
+    o.frequency.exponentialRampToValueAtTime(f0 * mult, s + 0.19);
+    const g = ctx.createGain();
+    // Slow attack is the whole character: nothing percussive happens.
+    env(g, s, 0.2 - i * 0.06, 0.055, 0.3);
+    o.connect(g).connect(master);
+    o.start(s);
+    o.stop(s + 0.42);
+  });
+  // A wet swallow underneath - the water closing over the neck. Low-passed
+  // noise, never bright: brightness is what makes a sound read as a break.
+  const n = ctx.createBufferSource();
+  n.buffer = noiseBuffer(0.3);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(380, t0);
+  lp.frequency.exponentialRampToValueAtTime(1100, t0 + 0.2);
+  const ng = ctx.createGain();
+  env(ng, t0, 0.1, 0.05, 0.22);
+  n.connect(lp).connect(ng).connect(master);
+  n.start(t0);
+  n.stop(t0 + 0.32);
+}
+
+/** A merged bubble coming apart again - the merge played downward and shorter. */
+export function sfxSplit() {
+  initAudio();
+  const t0 = ctx.currentTime;
+  const o = ctx.createOscillator();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(240, t0);
+  o.frequency.exponentialRampToValueAtTime(160, t0 + 0.13);
+  const g = ctx.createGain();
+  env(g, t0, 0.17, 0.02, 0.17);
+  o.connect(g).connect(master);
+  o.start(t0);
+  o.stop(t0 + 0.24);
+}
+
 export function sfxMiss() {
   initAudio();
   const t0 = ctx.currentTime;

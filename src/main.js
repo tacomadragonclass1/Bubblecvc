@@ -17,7 +17,10 @@
 import * as THREE from '../vendor/three.module.js';
 import { createOcean, updateOcean, makeWater } from './ocean.js';
 import { createReef, updateReef, loadCoral } from './reef.js';
-import { createBubbles, updateBubbles, fillBubble, popBubble, bubbleHit, layoutFor, resizeBubbles, disposeBubbles } from './bubbles.js';
+import { createBubbles, updateBubbles, fillBubble, popBubble, bubbleHit, slotAt, layoutFor,
+         resizeBubbles, disposeBubbles, aimWelds, commitWelds, weldState, filmDice,
+         filmSpan, films } from './bubbles.js';
+import { beginWeldGesture, extendWeldGesture, weldPreview, resolveWeldGesture } from './weld.js';
 import { createDie, applyWobble, layoutBay, DIE_SIZE, disposeDie } from './dice.js';
 import * as P from './physics.js';
 import * as A from './audio.js';
@@ -276,7 +279,7 @@ function vowelBubbleLayout() {
 }
 
 function relayout() {
-  resizeBubbles(bubbles, layoutFor(SLOTS, bounds, bubbleY));
+  resizeBubbles(bubbleSet, layoutFor(SLOTS, bounds, bubbleY));
   const sets = [board.onset, board.vowel, board.coda];
   const places = layoutBay(sets, bounds, bayTop);
   let k = 0;
@@ -326,7 +329,8 @@ function wireChrome() {
 }
 
 // ------------------------------------------------------------------- pointer
-let drag = null;
+let drag = null;        // a die being dragged out of the bay
+let weldDrag = null;    // a finger on the bubble row: a pop or a merge
 
 function toWorld(ev) {
   const ndc = new THREE.Vector2(
@@ -351,22 +355,47 @@ function dieAt(p) {
   return null;
 }
 
+/**
+ * ⛔⛔ THE POP MOVED FROM pointerdown TO pointerup, AND IT HAD TO.
+ *
+ * A tap on a bubble pops it; a drag ACROSS bubbles welds them. Both begin with
+ * a finger landing on a bubble, so the two are indistinguishable at the moment
+ * of pointerdown - the only thing that tells them apart is what the finger does
+ * next. Popping on the way down meant every merge gesture destroyed a letter
+ * before it started.
+ *
+ * The cost is that a pop now waits for the finger to lift, which is a tap's
+ * worth of latency (under 150ms, and exactly how every button on the panel
+ * already behaves). The cost of getting it wrong the other way is a letter
+ * silently vanishing mid-chain, which is the one failure this app has spent the
+ * most effort eliminating.
+ *
+ * ⭐ AMBIGUOUS MEANS DO NOTHING. A gesture that crosses no boundary but wandered
+ * too far to be a tap resolves to 'none'. Never to a pop: see weld.js.
+ */
 function wirePointer(canvas) {
   canvas.addEventListener('pointerdown', e => {
     if (!running) return;
     A.unlock();
     const p = toWorld(e);
 
-    // Popping takes priority: a filled bubble is a bigger, likelier target than
-    // anything behind it, and clearing a slot is the chain move.
-    const hit = bubbleHit(bubbles, p);
-    if (hit && hit.die) {
-      // Popping releases EVERYTHING in the bubble - normally one die, but if a
-      // second ever got in there it comes out too rather than being stranded.
-      for (const die of popBubble(hit)) P.sendHome(die);
-      A.sfxPop();
-      lastSpoken = '';
-      syncOctopus();
+    // The bubble row takes priority over the bay: it sits above it, the targets
+    // are much larger, and both of its gestures are the teacher's moves.
+    // ⭐ An EMPTY bubble starts a gesture too. Welding is board setup as much as
+    // it is annotation - a teacher may well build the rime bubble first and
+    // then throw two letters into it.
+    const hit = bubbleHit(bubbleSet, p);
+    if (hit) {
+      // Capture keeps the sweep alive if the finger leaves the canvas, but it
+      // is an optimisation, not a requirement - and it throws for any pointer
+      // the browser does not consider active. The gesture must not be lost
+      // because of that, so it is allowed to fail.
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* not fatal */ }
+      weldDrag = {
+        id: e.pointerId,
+        g: beginWeldGesture(hit.index),
+        from: new THREE.Vector2(p.x, p.y),
+      };
       return;
     }
 
@@ -383,6 +412,21 @@ function wirePointer(canvas) {
   });
 
   canvas.addEventListener('pointermove', e => {
+    if (weldDrag && e.pointerId === weldDrag.id) {
+      const p = toWorld(e);
+      // ⭐ A LOOSER reach than the tap test. A finger sweeping between two
+      // bubbles dips through the sliver of water between their rims, and a
+      // sweep that stopped registering there would never see the far bubble.
+      const over = slotAt(bubbleSet, p, 2.0);
+      extendWeldGesture(weldDrag.g, over ? over.index : null,
+                        Math.hypot(p.x - weldDrag.from.x, p.y - weldDrag.from.y));
+      // ⭐ LIVE PREVIEW, not a hint drawn on top. The welds animate toward what
+      // releasing would do, so the neck actually starts opening under the
+      // teacher's finger - and dragging back to one bubble takes it apart
+      // again. The feedback is the thing itself.
+      aimWelds(bubbleSet, weldPreview(weldDrag.g, weldState(bubbleSet)));
+      return;
+    }
     if (!drag || e.pointerId !== drag.id) return;
     const p = toWorld(e);
     drag.die.position.set(p.x + drag.grabOffset.x, p.y + drag.grabOffset.y, 0.3);
@@ -391,6 +435,31 @@ function wirePointer(canvas) {
   });
 
   const release = e => {
+    if (weldDrag && e.pointerId === weldDrag.id) {
+      const g = weldDrag.g;
+      weldDrag = null;
+      const slot = bubbles[g.lo];
+      const decided = resolveWeldGesture(g, weldState(bubbleSet), slot ? slot.r : 4);
+      if (decided.kind === 'weld') {
+        commitWelds(bubbleSet, decided.preview);
+        if (decided.preview.on) A.sfxMerge(decided.preview.bs.length);
+        else A.sfxSplit();
+      } else if (decided.kind === 'pop') {
+        const target = bubbles[g.lo];
+        // ⛔ The whole FILM, not the lobe that was tapped. A merged bubble is
+        // one membrane and popping it empties all of it.
+        if (target && filmDice(target).length) {
+          for (const die of popBubble(target)) P.sendHome(die);
+          A.sfxPop();
+          lastSpoken = '';
+          syncOctopus();
+        }
+      } else {
+        // Abandoned drag: let the preview fall back to what is committed.
+        aimWelds(bubbleSet, null);
+      }
+      return;
+    }
     if (!drag || e.pointerId !== drag.id) return;
     const die = drag.die;
     const { vx, vy } = P.velocityFromGesture(drag.samples, performance.now() / 1000);
@@ -408,7 +477,15 @@ function wirePointer(canvas) {
     A.sfxFlick(strength);
   };
   canvas.addEventListener('pointerup', release);
-  canvas.addEventListener('pointercancel', release);
+  const cancel = e => {
+    if (weldDrag && e.pointerId === weldDrag.id) {
+      weldDrag = null;
+      aimWelds(bubbleSet, null);
+      return;
+    }
+    release(e);
+  };
+  canvas.addEventListener('pointercancel', cancel);
 }
 
 // --------------------------------------------------------------- word state
@@ -558,7 +635,7 @@ function frame() {
   if (ink) ink.update(dt);
 
   if (running) {
-    updateBubbles(bubbles, t, dt, reducedMotion, popFX);
+    updateBubbles(bubbleSet, t, dt, reducedMotion, popFX);
 
     for (const die of dice) {
       const u = die.userData;
@@ -692,6 +769,66 @@ window.__bubblecvc = {
     return 'popped ' + i + ' (released ' + freed.length + ')';
   },
   get bayTop() { return bayTop; },
+  /**
+   * ⭐ THE WELD HANDLES. A finger drag cannot be driven through remote browser
+   * automation - synthetic pointer events do not reliably deliver pointerdown
+   * here and rAF is throttled to about 1Hz - so these are the only honest way
+   * to inspect a merge in the real page. The gesture DECISION is unit tested
+   * separately in test/bubble-merge.test.mjs; these drive the result of it.
+   */
+  get welds() {
+    return bubbleSet ? bubbleSet.welds.map(w => ({
+      on: w.on, w: +w.w.toFixed(3), target: w.target,
+    })) : null;
+  },
+  /** How the row is grouped into films right now, e.g. ['c', 'at']. */
+  get films() {
+    if (!bubbles) return null;
+    return films(bubbleSet).map(lead => lead.members
+      .map(m => (m.die ? m.die.userData.ch : '_')).join(''));
+  },
+  /** Weld or unweld one boundary (0 = onset|vowel, 1 = vowel|coda). */
+  weld(boundary, on = true) {
+    if (!bubbleSet) return 'no board';
+    const wd = bubbleSet.welds[boundary];
+    if (!wd) return 'no boundary ' + boundary;
+    wd.on = !!on;
+    aimWelds(bubbleSet, null);
+    return 'boundary ' + boundary + ' -> ' + (on ? 'welded' : 'split');
+  },
+  /**
+   * Replay a whole finger sweep from slot `a` to slot `b`, exactly as the
+   * pointer handler would, and report what it decided. This is the way to check
+   * that a sweep welds and a tap pops without touching the DOM.
+   */
+  sweep(a, b) {
+    if (!bubbleSet) return 'no board';
+    const g = beginWeldGesture(a);
+    const step = b >= a ? 1 : -1;
+    for (let i = a; i !== b + step; i += step) {
+      extendWeldGesture(g, i, Math.abs(bubbles[i].pos.x - bubbles[a].pos.x));
+    }
+    const decided = resolveWeldGesture(g, weldState(bubbleSet), bubbles[a].r);
+    if (decided.kind === 'weld') {
+      commitWelds(bubbleSet, decided.preview);
+      if (decided.preview.on) A.sfxMerge(decided.preview.bs.length); else A.sfxSplit();
+    } else if (decided.kind === 'pop') {
+      const t = bubbles[a];
+      if (filmDice(t).length) {
+        for (const die of popBubble(t)) P.sendHome(die);
+        A.sfxPop(); lastSpoken = ''; syncOctopus();
+      }
+    }
+    return decided.kind + (decided.preview ? ' ' + JSON.stringify(decided.preview) : '');
+  },
+  /** Lobe centres and the film each slot belongs to - the merged geometry. */
+  get lobes() {
+    if (!bubbles) return null;
+    return bubbles.map(b => ({
+      i: b.index, x: +b.pos.x.toFixed(2), y: +b.pos.y.toFixed(2),
+      film: b.lead.index, span: filmSpan(b),
+    }));
+  },
   /**
    * The reef octopus. `octoState` is null while it is away between passes -
    * that is the normal resting condition, not a fault. `octoShow()` drops it
